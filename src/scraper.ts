@@ -17,6 +17,7 @@ import {
   LIST_COMPANY_SELECTOR,
   COMPANY_SELECTOR,
   DESCRIPTION_SELECTOR,
+  JOB_LINK_SELECTOR,
 } from './selectors';
 import type {
   CompanyMismatchCheck,
@@ -59,6 +60,18 @@ function jobItemsLocator(page: Page): Locator {
 export function isCompanyMismatch({ listCompany, detailCompany }: CompanyMismatchCheck): boolean {
   if (!listCompany || !detailCompany) return false;
   return listCompany.trim() !== detailCompany.trim();
+}
+
+// sourceUrl comes from scraped, moving markup (see file header comment), so a
+// malformed/relative href should degrade sourceHostname to null rather than
+// failing the whole job over one supplementary field.
+function hostnameOf(url: string | null): string | null {
+  if (!url) return null;
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return null;
+  }
 }
 
 // A "stale" result is a successful scrape whose data might be untrustworthy:
@@ -334,7 +347,8 @@ export interface ScrapeJobOptions {
 interface JobIdentity {
   title: string | null;
   listCompany: string | null;
-  jobId: string | null;
+  sourceJobId: string | null;
+  sourceUrl: string | null;
 }
 
 async function readJobIdentity(jobItem: Locator): Promise<JobIdentity> {
@@ -353,9 +367,15 @@ async function readJobIdentity(jobItem: Locator): Promise<JobIdentity> {
     .catch(() => null);
 
   const entityUrn = await jobItem.locator('.base-card').first().getAttribute('data-entity-urn');
-  const jobId = entityUrn?.match(/jobPosting:(\d+)$/)?.[1] ?? null;
+  const sourceJobId = entityUrn?.match(/jobPosting:(\d+)$/)?.[1] ?? null;
 
-  return { title, listCompany, jobId };
+  // The list item's own link already carries the job's canonical URL, before
+  // the card is even clicked — LinkedIn's guest search re-renders the detail
+  // pane client-side on click, so page.url() never changes and can't be used
+  // for this instead.
+  const sourceUrl = await jobItem.locator(JOB_LINK_SELECTOR).first().getAttribute('href').catch(() => null);
+
+  return { title, listCompany, sourceJobId, sourceUrl };
 }
 
 // The sign-in nag can also block the click on the job card itself (not just
@@ -393,20 +413,20 @@ async function waitForJobDetailToLoad(page: Page, jobId: string | null): Promise
     .catch(() => { });
 }
 
-async function readCompanyAndDescription(page: Page): Promise<{ company: string | null; description: string | null }> {
+async function readCompanyAndDescription(page: Page): Promise<{ company: string | null; descriptionText: string | null }> {
   const company = await page
     .locator(COMPANY_SELECTOR)
     .first()
     .innerText({ timeout: 1000 })
     .then((t) => t.trim())
     .catch(() => null);
-  const description = await page
+  const descriptionText = await page
     .locator(DESCRIPTION_SELECTOR)
     .first()
     .innerText({ timeout: 1000 })
     .then((t) => t.trim())
     .catch(() => null);
-  return { company, description };
+  return { company, descriptionText };
 }
 
 // The "sign in to view more jobs" nag can render asynchronously at any point
@@ -434,7 +454,9 @@ export async function scrapeJob(
   // the run timestamp keeps it distinct-ish across runs/indices.
   const fallbackTitle = `${options.runTimestamp}-${String(index + 1).padStart(3, '0')}`;
   let title: string | null = null;
-  let jobId: string | null = null;
+  let sourceJobId: string | null = null;
+  let sourceUrl: string | null = null;
+  let sourceHostname: string | null = null;
   // Hoisted so the catch return keeps the marker when a duplicate's scrape
   // fails partway through.
   let duplicateOfIdx: number | null = null;
@@ -451,32 +473,37 @@ export async function scrapeJob(
         index,
         title: null,
         company: null,
-        description: null,
+        descriptionText: null,
         status: 'skipped',
         error: 'No job title found for this list item — not a real job card',
         companyMismatch: false,
         lateOverlayDetected: false,
-        jobId: null,
+        sourceJobId: null,
+        sourceUrl: null,
+        sourceHostname: null,
+        scrapedAt: new Date().toISOString(),
         duplicateOfIdx: null,
       };
     }
 
     const identity = await readJobIdentity(jobItem);
     title = identity.title;
-    jobId = identity.jobId;
+    sourceJobId = identity.sourceJobId;
+    sourceUrl = identity.sourceUrl;
+    sourceHostname = hostnameOf(sourceUrl);
 
     // Duplicates (repeated pages from LinkedIn's list-loading pagination) are
     // scraped in full like any other job — they're only marked, so the
     // caller can hide or show them.
-    duplicateOfIdx = registerJobOccurrence(options.seenJobIds, jobId, index);
+    duplicateOfIdx = registerJobOccurrence(options.seenJobIds, sourceJobId, index);
 
     if (options.preClickDelayMs) await sleep(options.preClickDelayMs);
 
     await clickWithOverlayRetries(jobItem, page, options.clickRetryAttempts);
     await dismissOverlayAfterClick(page);
-    await waitForJobDetailToLoad(page, jobId);
+    await waitForJobDetailToLoad(page, sourceJobId);
 
-    const { company, description } = await readCompanyAndDescription(page);
+    const { company, descriptionText } = await readCompanyAndDescription(page);
     const companyMismatch = isCompanyMismatch({ listCompany: identity.listCompany, detailCompany: company });
 
     const lateOverlayDetected = await checkForLateOverlay(page);
@@ -485,12 +512,15 @@ export async function scrapeJob(
       index,
       title: title || fallbackTitle,
       company,
-      description,
+      descriptionText,
       status: 'success',
       error: null,
       companyMismatch,
       lateOverlayDetected,
-      jobId,
+      sourceJobId,
+      sourceUrl,
+      sourceHostname,
+      scrapedAt: new Date().toISOString(),
       duplicateOfIdx,
     };
   } catch (error) {
@@ -498,12 +528,15 @@ export async function scrapeJob(
       index,
       title: title || fallbackTitle,
       company: null,
-      description: null,
+      descriptionText: null,
       status: 'failed',
       error: error instanceof Error ? error.message : String(error),
       companyMismatch: false,
       lateOverlayDetected: false,
-      jobId,
+      sourceJobId,
+      sourceUrl,
+      sourceHostname,
+      scrapedAt: new Date().toISOString(),
       duplicateOfIdx,
     };
   }

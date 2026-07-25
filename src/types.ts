@@ -5,14 +5,30 @@ export interface JobResult {
   index: number;
   title: string | null;
   company: string | null;
-  description: string | null;
+  descriptionText: string | null;
   status: JobStatus;
   error: string | null;
   companyMismatch: boolean;
   /** Whether a LinkedIn sign-in overlay was detected reappearing late, around when this job's data was read. */
   lateOverlayDetected: boolean;
   /** LinkedIn's numeric posting ID, parsed from the list item's href; used to detect duplicate/repeated list pages. */
-  jobId: string | null;
+  sourceJobId: string | null;
+  /**
+   * Complete URL of the job, scraped from the list item's own link before
+   * the card is even clicked. Null when it couldn't be read — e.g. a
+   * `'skipped'` result (not a real job card), or a `'failed'` result whose
+   * error happened before the job's identity could be read.
+   */
+  sourceUrl: string | null;
+  /**
+   * Hostname of `sourceUrl`, e.g. `de.linkedin.com`. LinkedIn assigns
+   * individual job postings to country-specific subdomains, so this can
+   * differ across jobs within the same run. Null exactly when `sourceUrl`
+   * is null or unparseable as a URL.
+   */
+  sourceHostname: string | null;
+  /** ISO-8601 timestamp (`new Date().toISOString()`) marking when this job's result was finalized — always set, even for `'skipped'`/`'failed'` results. */
+  scrapedAt: string;
   /** Index of the earlier job in this run with the same posting ID; null when not a duplicate. */
   duplicateOfIdx: number | null;
 }

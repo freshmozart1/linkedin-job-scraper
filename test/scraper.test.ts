@@ -17,6 +17,7 @@ import {
   LIST_COMPANY_SELECTOR,
   COMPANY_SELECTOR,
   DESCRIPTION_SELECTOR,
+  JOB_LINK_SELECTOR,
   type JobResult,
   type ScrapeProgressEvent,
 } from '../src/index';
@@ -99,12 +100,15 @@ function makeResult(partial: Partial<JobResult> & { index: number }): JobResult 
   return {
     title: null,
     company: null,
-    description: null,
+    descriptionText: null,
     status: 'success',
     error: null,
     companyMismatch: false,
     lateOverlayDetected: false,
-    jobId: null,
+    sourceJobId: null,
+    sourceUrl: null,
+    sourceHostname: null,
+    scrapedAt: '2024-01-01T00:00:00.000Z',
     duplicateOfIdx: null,
     ...partial,
   };
@@ -315,7 +319,8 @@ test('clickLoadPhase honors a caller-supplied clickRetryAttempts instead of the 
 function makeJobLocator(opts: {
   title: string | null;
   listCompany: string | null;
-  jobId: string | null;
+  sourceJobId: string | null;
+  sourceUrl?: string | null;
   onClick?: () => void;
   hasTitle?: boolean;
 }): Locator {
@@ -341,7 +346,12 @@ function makeJobLocator(opts: {
         });
       }
       if (selector === '.base-card') {
-        return createFakeLocator({ getAttribute: () => (opts.jobId ? `urn:li:fsd_jobPosting:${opts.jobId}` : null) });
+        return createFakeLocator({
+          getAttribute: () => (opts.sourceJobId ? `urn:li:fsd_jobPosting:${opts.sourceJobId}` : null),
+        });
+      }
+      if (selector === JOB_LINK_SELECTOR) {
+        return createFakeLocator({ getAttribute: () => opts.sourceUrl ?? null });
       }
       return createFakeLocator();
     },
@@ -364,7 +374,12 @@ function baseScrapeJobLocators(detailCompany: () => string | null, description =
 }
 
 test('scrapeJob returns a success result with the scraped title, company, and description', async () => {
-  const jobItem = makeJobLocator({ title: 'Frontend Developer', listCompany: 'Acme', jobId: '111' });
+  const jobItem = makeJobLocator({
+    title: 'Frontend Developer',
+    listCompany: 'Acme',
+    sourceJobId: '111',
+    sourceUrl: 'https://de.linkedin.com/jobs/view/frontend-developer-at-acme-111',
+  });
   const page = createFakePage({
     locatorsBySelector: {
       [JOB_LIST_SELECTOR]: createFakeLocator({ nth: () => jobItem }),
@@ -378,15 +393,18 @@ test('scrapeJob returns a success result with the scraped title, company, and de
   assert.equal(result.status, 'success');
   assert.equal(result.title, 'Frontend Developer');
   assert.equal(result.company, 'Acme');
-  assert.equal(result.description, 'A description.');
+  assert.equal(result.descriptionText, 'A description.');
   assert.equal(result.companyMismatch, false);
   assert.equal(result.lateOverlayDetected, false);
-  assert.equal(result.jobId, '111');
+  assert.equal(result.sourceJobId, '111');
+  assert.equal(result.sourceUrl, 'https://de.linkedin.com/jobs/view/frontend-developer-at-acme-111');
+  assert.equal(result.sourceHostname, 'de.linkedin.com');
+  assert.match(result.scrapedAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
   assert.equal(result.duplicateOfIdx, null);
 });
 
 test('scrapeJob skips a list item with no job title instead of scraping it as a job', async () => {
-  const jobItem = makeJobLocator({ title: null, listCompany: null, jobId: null, hasTitle: false });
+  const jobItem = makeJobLocator({ title: null, listCompany: null, sourceJobId: null, hasTitle: false });
   const page = createFakePage({
     locatorsBySelector: { [JOB_LIST_SELECTOR]: createFakeLocator({ nth: () => jobItem }) },
   });
@@ -396,10 +414,13 @@ test('scrapeJob skips a list item with no job title instead of scraping it as a 
   assert.equal(result.status, 'skipped');
   assert.match(result.error ?? '', /not a real job card/i);
   assert.equal(result.index, 7);
+  assert.equal(result.sourceJobId, null);
+  assert.equal(result.sourceUrl, null);
+  assert.equal(result.sourceHostname, null);
 });
 
 test('scrapeJob marks a repeated posting ID as a duplicate of its first occurrence', async () => {
-  const jobItem = makeJobLocator({ title: 'Frontend Developer', listCompany: 'Acme', jobId: '111' });
+  const jobItem = makeJobLocator({ title: 'Frontend Developer', listCompany: 'Acme', sourceJobId: '111' });
   const page = createFakePage({
     locatorsBySelector: {
       [JOB_LIST_SELECTOR]: createFakeLocator({ nth: () => jobItem }),
@@ -429,6 +450,34 @@ test('scrapeJob returns a failed result when an unexpected error is thrown', asy
 
   assert.equal(result.status, 'failed');
   assert.match(result.error ?? '', /element detached from DOM/);
+  assert.equal(result.sourceJobId, null);
+  assert.equal(result.sourceUrl, null);
+  assert.equal(result.sourceHostname, null);
+});
+
+test('scrapeJob fails after the click but still keeps the sourceJobId/sourceUrl captured during identity read', async () => {
+  const jobItem = makeJobLocator({
+    title: 'Frontend Developer',
+    listCompany: 'Acme',
+    sourceJobId: '111',
+    sourceUrl: 'https://www.linkedin.com/jobs/view/frontend-developer-at-acme-111',
+    onClick: () => {
+      throw new Error('click intercepted by another overlay');
+    },
+  });
+  const page = createFakePage({
+    locatorsBySelector: {
+      [JOB_LIST_SELECTOR]: createFakeLocator({ nth: () => jobItem }),
+      [OVERLAY_SELECTOR]: createFakeLocator({ isVisible: () => false }),
+    },
+  });
+
+  const result = await scrapeJob(page, 0, 1, { seenJobIds: new Map(), runTimestamp: 123, clickRetryAttempts: 1 });
+
+  assert.equal(result.status, 'failed');
+  assert.equal(result.sourceJobId, '111');
+  assert.equal(result.sourceUrl, 'https://www.linkedin.com/jobs/view/frontend-developer-at-acme-111');
+  assert.equal(result.sourceHostname, 'www.linkedin.com');
 });
 
 test('scrapeAllJobsOnce collects the indices of jobs whose detail-pane company mismatches the list', async () => {
@@ -436,7 +485,7 @@ test('scrapeAllJobsOnce collects the indices of jobs whose detail-pane company m
   const cleanJob = makeJobLocator({
     title: 'Frontend Developer',
     listCompany: 'Acme',
-    jobId: '111',
+    sourceJobId: '111',
     onClick: () => {
       currentDetailCompany = 'Acme';
     },
@@ -444,7 +493,7 @@ test('scrapeAllJobsOnce collects the indices of jobs whose detail-pane company m
   const staleJob = makeJobLocator({
     title: 'Backend Developer',
     listCompany: 'Acme',
-    jobId: '222',
+    sourceJobId: '222',
     onClick: () => {
       currentDetailCompany = 'Globex Corporation';
     },
@@ -471,7 +520,7 @@ test('scrapeAllJobsOnce emits job:done for a clean result and job:stale for a st
   const cleanJob = makeJobLocator({
     title: 'Frontend Developer',
     listCompany: 'Acme',
-    jobId: '111',
+    sourceJobId: '111',
     onClick: () => {
       currentDetailCompany = 'Acme';
     },
@@ -479,7 +528,7 @@ test('scrapeAllJobsOnce emits job:done for a clean result and job:stale for a st
   const staleJob = makeJobLocator({
     title: 'Backend Developer',
     listCompany: 'Acme',
-    jobId: '222',
+    sourceJobId: '222',
     onClick: () => {
       currentDetailCompany = 'Globex Corporation';
     },
@@ -511,7 +560,7 @@ test('a job that comes back clean on a later scrapeAllJobsOnce pass emits job:do
     makeJobLocator({
       title: 'Backend Developer',
       listCompany: 'Acme',
-      jobId: '222',
+      sourceJobId: '222',
       onClick: () => {}, // detail company left as-is by this click
     }),
   ];
@@ -555,7 +604,7 @@ test('a job that comes back clean on a later scrapeAllJobsOnce pass emits job:do
 test('a job that is still stale on a later scrapeAllJobsOnce pass emits job:stale again (failed-retry simulation)', async () => {
   const currentDetailCompany = 'Globex Corporation'; // stays mismatched across both passes
   const jobLocators = [
-    makeJobLocator({ title: 'Backend Developer', listCompany: 'Acme', jobId: '222', onClick: () => {} }),
+    makeJobLocator({ title: 'Backend Developer', listCompany: 'Acme', sourceJobId: '222', onClick: () => {} }),
   ];
   const page = createFakePage({
     locatorsBySelector: {
