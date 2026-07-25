@@ -74,3 +74,70 @@ export function buildSearchUrl(params: SearchParams): string {
 
   return url.toString();
 }
+
+// ---------------------------------------------------------------------------
+// Job result URLs
+//
+// The functions below work on the *other* kind of URL this package touches:
+// not the search URL it builds, but the per-job URLs it scrapes out of the
+// result list. Both are pure, and all three are exported so a consumer can
+// re-derive them from a stored `sourceUrl` instead of trusting a stale field.
+// ---------------------------------------------------------------------------
+
+/**
+ * Turns a scraped job `href` into a stable, absolute job URL, or null when it
+ * isn't one.
+ *
+ * Three things happen here, each for a reason:
+ * - **Resolution against `baseUrl`.** `getAttribute` returns the raw attribute,
+ *   not the resolved property, so a relative href stays relative. LinkedIn's
+ *   guest search re-renders client-side and never navigates, so the search URL
+ *   remains a correct base for the whole run.
+ * - **Dropping the query and fragment.** The card href carries a per-session
+ *   `refId`/`trackingId` plus `position`/`pageNum`, so the same posting yields
+ *   a different URL on every run — which breaks any consumer deduping or
+ *   upserting on this field. `position`/`pageNum` also just restate `index`.
+ * - **Rejecting hostname-less URLs.** `new URL('javascript:void(0)')` parses
+ *   without throwing and reports an empty hostname, so a try/catch alone would
+ *   let junk through. Nothing without a hostname is a job URL.
+ */
+export function normalizeJobUrl(href: string | null | undefined, baseUrl: string): string | null {
+  if (!href) return null;
+  let url: URL;
+  try {
+    url = new URL(href, baseUrl);
+  } catch {
+    return null;
+  }
+  if (!url.hostname) return null;
+  url.search = '';
+  url.hash = '';
+  return url.toString();
+}
+
+/**
+ * Hostname of a job URL, e.g. `de.linkedin.com` — LinkedIn serves individual
+ * postings from country-specific subdomains, so this varies job to job within
+ * one run. Null for anything that isn't a URL with a hostname.
+ */
+export function hostnameOf(url: string | null | undefined): string | null {
+  if (!url) return null;
+  try {
+    // `.hostname` is '' (not an error) for schemes like `javascript:` and
+    // `mailto:`, so the `|| null` is doing real work here.
+    return new URL(url).hostname || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * LinkedIn's numeric posting ID, recovered from the trailing `-<id>` segment
+ * of a job URL. This is a second, independent carrier of the same ID that
+ * `data-entity-urn` holds — worth having, because losing the ID silently
+ * disables both duplicate detection and the detail-pane wait.
+ */
+export function jobIdFromUrl(url: string | null | undefined): string | null {
+  if (!url) return null;
+  return url.match(/-(\d+)\/?$/)?.[1] ?? null;
+}

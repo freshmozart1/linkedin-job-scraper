@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A single-purpose library: a Playwright driver that scrapes LinkedIn's **public/guest** job search results (no login, no credentials). It loads every job on a search via infinite scroll + "See more jobs" pagination, clicks each job card, and scrapes title/company/description, with duplicate and stale-result detection built in.
+A single-purpose library: a Playwright driver that scrapes LinkedIn's **public/guest** job search results (no login, no credentials). It loads every job on a search via infinite scroll + "See more jobs" pagination, clicks each job card, and scrapes title/company/`descriptionText` plus the posting's own source identity (`sourceJobId`/`sourceUrl`/`sourceHostname`/`scrapedAt`), with duplicate and stale-result detection built in.
 
 Deliberate design constraint: **nothing about the search is hardcoded.** Every `SearchParams` field except `keywords` is optional and simply isn't sent when omitted, and every engine timing/retry constant in `ScraperOptions` is caller-overridable. Product-specific defaults (a fixed location, headless on/off) belong in the consumer, not here. Resist requests to bake a default search into the engine.
 
@@ -14,7 +14,7 @@ This scrapes an unofficial, moving surface — LinkedIn's markup and anti-bot ga
 
 ```bash
 npm run build       # tsc -p tsconfig.json -> dist/ (JS + .d.ts + sourcemaps)
-npm test            # node --import tsx --test "test/*.test.ts"  (39 tests, no browser)
+npm test            # node --import tsx --test "test/*.test.ts"  (55 tests, no browser)
 npm run typecheck   # tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json
 
 # single test file / single test by name:
@@ -30,7 +30,9 @@ There is no lint script; `typecheck` is the correctness gate. The `test` glob is
 
 `src/index.ts` is the only public surface — it re-exports the types, the selectors, `buildSearchUrl`, and the scraper functions. Internal helpers in `scraper.ts` are intentionally not exported; the exported subset is what the tests drive directly.
 
-- **`src/url.ts`** — Pure function `buildSearchUrl(SearchParams)`. Holds LinkedIn's guest-search query code tables (`f_TPR` date, `f_E` experience, `f_JT` job type, `f_WT` workplace, `sortBy`) that map friendly union members onto LinkedIn's opaque codes. `extraParams` is the escape hatch for params not explicitly modeled.
+- **`src/url.ts`** — All pure URL logic, in two halves. Outbound: `buildSearchUrl(SearchParams)`, holding LinkedIn's guest-search query code tables (`f_TPR` date, `f_E` experience, `f_JT` job type, `f_WT` workplace, `sortBy`) that map friendly union members onto LinkedIn's opaque codes; `extraParams` is the escape hatch for params not explicitly modeled. Inbound: `normalizeJobUrl`/`hostnameOf`/`jobIdFromUrl`, which turn a scraped job `href` into the `sourceUrl`/`sourceHostname`/`sourceJobId` fields. All are exported so consumers can re-derive the derived fields from a stored URL rather than trusting a persisted value.
+
+  Three non-obvious things `normalizeJobUrl` has to do, each of which was a real bug: `getAttribute` returns the **raw** attribute, so a relative href stays relative unless resolved against the search URL; the card href carries a per-session `refId`/`trackingId`/`position` query string, so an unstripped URL differs on every run and breaks consumer dedupe/upsert; and `new URL('javascript:void(0)')` **parses without throwing** and reports an empty-string hostname, so a bare try/catch isn't enough to reject non-URLs.
 - **`src/selectors.ts`** — Every CSS selector in one place, exported so consumers and tests don't hand-duplicate the strings.
 - **`src/types.ts`** — All public types. No runtime code.
 - **`src/scraper.ts`** — The whole engine (~600 lines). The parts that carry non-obvious reasoning:
@@ -50,6 +52,16 @@ The overlay selector stays narrow (`.modal__overlay--visible`) on purpose — a 
 LinkedIn's detail pane sometimes doesn't re-render when cards are clicked quickly: the title link updates but the rest of the pane is left over from the previous job. Two flags catch this per job — `companyMismatch` (list-pane company vs. detail-pane company disagree) and `lateOverlayDetected` (an overlay was visible right when data was read). `isStaleResult()` folds both into one predicate, and it excludes `status: 'failed'` implicitly because the catch block forces both flags false on failure.
 
 Stale jobs get **exactly one** retry, deferred until the whole list has been scraped once (`retryStaleJobs`) — by then the page has settled, and the extra pre-click delay doesn't compound into every job. `scrapeJobAndRecord` writes `results[index] = result` (indexed write, not `push`) precisely so a retry replaces rather than appends.
+
+### Identity reads are bounded, concurrent, and individually recoverable
+
+`readJobIdentity` reads four things off the list item (title, list company, `data-entity-urn`, job href) in one `Promise.all`. Three properties there are load-bearing:
+
+- **Every read carries an explicit `{ timeout: 1000 }`.** Playwright's default is 30s and its `getAttribute`/`innerText` auto-wait for the element, so an unbounded read turns one renamed class into ~30s of dead wait *per job* — an hour on a 120-job run, with nothing surfaced.
+- **Every read has its own `.catch(() => null)`.** An unguarded rejection takes down the whole identity, including the `sourceUrl` that is specifically supposed to survive a later failure.
+- **They're concurrent** because they have no data dependency on each other; sequentially, the degenerate all-missing case costs 4× the timeout.
+
+`sourceJobId` prefers `data-entity-urn` but falls back to the trailing ID in `sourceUrl`. That fallback matters more than it looks: a null `sourceJobId` silently disables duplicate detection *and* makes `waitForJobDetailToLoad` skip its detail-pane wait entirely — which is the exact condition that manufactures stale results. Two independent carriers of the same ID means one attribute rename doesn't take both mechanisms down.
 
 ### Duplicates are marked, not dropped
 

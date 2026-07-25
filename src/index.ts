@@ -1,6 +1,6 @@
 export * from './types';
 export * from './selectors';
-export { buildSearchUrl } from './url';
+export { buildSearchUrl, normalizeJobUrl, hostnameOf, jobIdFromUrl } from './url';
 export {
   runScrape,
   scrapeJob,

@@ -11,20 +11,32 @@ export interface JobResult {
   companyMismatch: boolean;
   /** Whether a LinkedIn sign-in overlay was detected reappearing late, around when this job's data was read. */
   lateOverlayDetected: boolean;
-  /** LinkedIn's numeric posting ID, parsed from the list item's href; used to detect duplicate/repeated list pages. */
+  /**
+   * LinkedIn's numeric posting ID, read from the list item's `data-entity-urn`
+   * and falling back to the trailing ID in `sourceUrl` when that attribute is
+   * missing; used to detect duplicate/repeated list pages.
+   */
   sourceJobId: string | null;
   /**
-   * Complete URL of the job, scraped from the list item's own link before
-   * the card is even clicked. Null when it couldn't be read — e.g. a
-   * `'skipped'` result (not a real job card), or a `'failed'` result whose
-   * error happened before the job's identity could be read.
+   * Absolute URL of this individual job posting (not the search page — each
+   * job has its own), scraped from the list item's own link before the card is
+   * even clicked, then normalized: resolved against the search page URL and
+   * stripped of LinkedIn's per-session tracking query string, so the same
+   * posting yields the same URL on every run and is safe to dedupe or upsert
+   * on.
+   *
+   * Null whenever no usable URL could be read: a `'skipped'` result, a
+   * `'failed'` result whose error preceded the identity read, a card with no
+   * link, or an href carrying no hostname (e.g. `javascript:void(0)`). A
+   * `'success'` result can therefore still carry a null `sourceUrl`.
    */
   sourceUrl: string | null;
   /**
-   * Hostname of `sourceUrl`, e.g. `de.linkedin.com`. LinkedIn assigns
-   * individual job postings to country-specific subdomains, so this can
-   * differ across jobs within the same run. Null exactly when `sourceUrl`
-   * is null or unparseable as a URL.
+   * Hostname of `sourceUrl`, e.g. `de.linkedin.com`. LinkedIn serves
+   * individual job postings from country-specific subdomains, so this can
+   * differ across jobs within the same run. Null exactly when `sourceUrl` is
+   * null. Re-derivable from a stored `sourceUrl` via the exported
+   * `hostnameOf`.
    */
   sourceHostname: string | null;
   /** ISO-8601 timestamp (`new Date().toISOString()`) marking when this job's result was finalized — always set, even for `'skipped'`/`'failed'` results. */

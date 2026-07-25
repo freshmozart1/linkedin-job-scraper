@@ -8,7 +8,15 @@ export interface FakeLocatorConfig {
   isVisible?: () => boolean | Promise<boolean>;
   click?: () => void | Promise<void>;
   innerText?: () => string | Promise<string>;
-  getAttribute?: () => string | null | Promise<string | null>;
+  /**
+   * Receives the same `(name, options)` the scraper passes through, so tests
+   * can assert reads are given an explicit timeout rather than silently
+   * inheriting Playwright's 30s default on a missing element.
+   */
+  getAttribute?: (
+    name: string,
+    options?: { timeout?: number }
+  ) => string | null | Promise<string | null>;
   count?: () => number | Promise<number>;
   waitFor?: () => void | Promise<void>;
   scrollIntoViewIfNeeded?: () => void | Promise<void>;
@@ -34,7 +42,8 @@ export function createFakeLocator(config: FakeLocatorConfig = {}): Locator {
       if (!config.innerText) throw new Error('fake locator: innerText not configured');
       return config.innerText();
     },
-    getAttribute: async () => (config.getAttribute ? config.getAttribute() : null),
+    getAttribute: async (name: string, options?: { timeout?: number }) =>
+      config.getAttribute ? config.getAttribute(name, options) : null,
     count: async () => (config.count ? config.count() : 1),
     waitFor: async () => {
       if (config.waitFor) await config.waitFor();
@@ -58,11 +67,18 @@ export interface FakePageConfig {
    */
   evaluate?: () => unknown | Promise<unknown>;
   waitForLoadState?: () => void | Promise<void>;
+  /**
+   * The guest search URL the page is sitting on. LinkedIn re-renders the
+   * detail pane client-side, so this never changes mid-run — which is what
+   * makes it a stable base for resolving relative job hrefs.
+   */
+  url?: () => string;
 }
 
 export function createFakePage(config: FakePageConfig = {}): Page {
   const page = {
     locator: (selector: string) => config.locatorsBySelector?.[selector] ?? config.defaultLocator ?? createFakeLocator(),
+    url: () => config.url?.() ?? 'https://www.linkedin.com/jobs/search?keywords=frontend',
     evaluate: async () => (config.evaluate ? config.evaluate() : undefined),
     waitForLoadState: async () => {
       if (config.waitForLoadState) await config.waitForLoadState();

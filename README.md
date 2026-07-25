@@ -63,7 +63,7 @@ interface JobResult {
   companyMismatch: boolean;         // list-pane company disagreed with detail-pane company
   lateOverlayDetected: boolean;     // a sign-in overlay was visible when this job's data was read
   sourceJobId: string | null;       // LinkedIn's numeric posting ID
-  sourceUrl: string | null;         // the job's canonical URL, scraped from the list item's link
+  sourceUrl: string | null;         // absolute URL of this job posting, normalized (see below)
   sourceHostname: string | null;    // sourceUrl's hostname, e.g. de.linkedin.com (varies per job)
   scrapedAt: string;                // ISO-8601 timestamp, new Date().toISOString()
   duplicateOfIdx: number | null;    // index of the first job with this posting ID, else null
@@ -75,7 +75,7 @@ Field notes worth knowing before you consume this:
 - **`status`** — `'success'` means the card was clicked and the detail pane was read (that does *not* by itself mean the data is trustworthy; see `companyMismatch`/`lateOverlayDetected` below). `'skipped'` means the list item had no `<h3>` and so wasn't a real job card — it was never clicked, and every other field is null/false except `scrapedAt`, which is always set. `'failed'` means the click or read threw; `error` carries the message, `company`/`descriptionText` are null, and both suspicion flags are forced to `false`.
 - **`title`** — falls back to a synthetic `<runTimestamp>-<paddedIndex>` string (e.g. `1721904000000-007`) when the real title couldn't be read, so it is only `null` for `'skipped'` entries.
 - **`companyMismatch` / `lateOverlayDetected`** — the two staleness signals. Pass the result to the exported `isStaleResult(result)` rather than testing them by hand; it folds both into one predicate and is the same check the engine used to decide whether to retry. A result still flagged after the run means the retry didn't clear it — treat its `company`/`descriptionText` as possibly belonging to the previously-viewed job.
-- **`sourceUrl` / `sourceHostname` / `scrapedAt`** — `sourceUrl` is scraped directly from the job list item's own link, before the card is even clicked (LinkedIn's guest search re-renders the detail pane client-side on click, so `page.url()` never changes and can't be used for this). Because of that, both survive a later click/detail-pane failure — they're `null` only for `'skipped'` results or a `'failed'` result whose error happened before the job's identity could be read. `sourceHostname` is `sourceUrl`'s hostname; LinkedIn assigns individual postings to country-specific subdomains, so this can differ across jobs in the same run. `scrapedAt` is always set, even then.
+- **`sourceUrl` / `sourceHostname` / `scrapedAt`** — `sourceUrl` is the absolute URL of the individual job posting (each job has its own; it is not the search URL). It's scraped directly from the job list item's own link before the card is even clicked — LinkedIn's guest search re-renders the detail pane client-side on click, so `page.url()` never changes and can't be used for this — and then normalized: resolved against the search page URL and stripped of LinkedIn's per-session `refId`/`trackingId`/`position` query string, so the same posting produces the same URL on every run and is safe to dedupe or upsert on. Because it's captured before the click, it survives a later click/detail-pane failure. It is `null` whenever no usable URL could be read: `'skipped'` results, a `'failed'` result whose error preceded the identity read, a card with no link, or an href with no hostname — so **a `'success'` result can still carry a `null` `sourceUrl`**; don't assume otherwise. `sourceHostname` is `sourceUrl`'s hostname (`null` exactly when `sourceUrl` is); LinkedIn serves individual postings from country-specific subdomains, so it can differ across jobs in the same run. `scrapedAt` is always set, on every status.
 - **`duplicateOfIdx`** — LinkedIn's guest pagination can re-serve an earlier page verbatim. Repeats are scraped in full and only marked: `null` on first (and only) occurrences, otherwise the index of the first job with the same `sourceJobId`. Filter on `duplicateOfIdx === null` if you want each posting once. It stays `null` whenever `sourceJobId` is `null`, since identity can't be established.
 
 ## Progress events
@@ -115,6 +115,21 @@ onProgress: (event) => {
 ```
 
 `isStaleResult` is exported so callers can apply the same classification to any `JobResult` after the fact (e.g. when inspecting `outcome.results`) without re-deriving the condition themselves.
+
+## URL helpers
+
+The pure functions behind `sourceUrl`/`sourceHostname`/`sourceJobId` are exported too, so you can re-derive them from a stored URL instead of trusting a persisted field:
+
+```ts
+import { normalizeJobUrl, hostnameOf, jobIdFromUrl } from 'linkedin-job-scraper';
+
+normalizeJobUrl('/jobs/view/x-4012345678?refId=abc', 'https://de.linkedin.com/jobs/search');
+// 'https://de.linkedin.com/jobs/view/x-4012345678'   — resolved, tracking params stripped
+hostnameOf('https://de.linkedin.com/jobs/view/x-4012345678');  // 'de.linkedin.com'
+jobIdFromUrl('https://de.linkedin.com/jobs/view/x-4012345678'); // '4012345678'
+```
+
+All three return `null` rather than throwing on input that isn't a usable job URL.
 
 ## Notes
 
