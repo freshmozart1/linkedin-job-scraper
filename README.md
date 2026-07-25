@@ -39,15 +39,76 @@ Only `keywords` is required. Everything else (`location`, `geoId`, `datePosted`,
 
 Every engine tuning constant (browser `headless`/`viewport`, scroll/click retry limits, inter-job delay, overlay-clear timing) is optional and defaults to this package's own historically-working values — nothing is hardcoded inside the engine.
 
+## Return value: `ScrapeOutcome`
+
+`runScrape` resolves once every job has been scraped and the browser it launched has been closed. It never resolves partially — if the run throws, nothing is returned, so wrap the call if you want to keep partial data (collect it from `onProgress` instead).
+
+```ts
+interface ScrapeOutcome {
+  results: JobResult[];
+  url: string; // the exact LinkedIn guest search URL that was loaded
+}
+```
+
+`results` holds one entry per job card found on the search, ordered by list position — `results[i].index === i`. Nothing is filtered out: duplicates, skipped non-job list items, and failed scrapes all keep their slot, and a stale job that was retried appears once, at its own index, holding the retry's result.
+
+```ts
+interface JobResult {
+  index: number;                    // position in the loaded list
+  title: string | null;
+  company: string | null;           // read from the detail pane
+  description: string | null;
+  status: 'success' | 'skipped' | 'failed';
+  error: string | null;             // set when status is 'skipped' or 'failed'
+  companyMismatch: boolean;         // list-pane company disagreed with detail-pane company
+  lateOverlayDetected: boolean;     // a sign-in overlay was visible when this job's data was read
+  jobId: string | null;             // LinkedIn's numeric posting ID
+  duplicateOfIdx: number | null;    // index of the first job with this posting ID, else null
+}
+```
+
+Field notes worth knowing before you consume this:
+
+- **`status`** — `'success'` means the card was clicked and the detail pane was read (that does *not* by itself mean the data is trustworthy; see `companyMismatch`/`lateOverlayDetected` below). `'skipped'` means the list item had no `<h3>` and so wasn't a real job card — it was never clicked, and every other field is null/false. `'failed'` means the click or read threw; `error` carries the message, `company`/`description` are null, and both suspicion flags are forced to `false`.
+- **`title`** — falls back to a synthetic `<runTimestamp>-<paddedIndex>` string (e.g. `1721904000000-007`) when the real title couldn't be read, so it is only `null` for `'skipped'` entries.
+- **`companyMismatch` / `lateOverlayDetected`** — the two staleness signals. Pass the result to the exported `isStaleResult(result)` rather than testing them by hand; it folds both into one predicate and is the same check the engine used to decide whether to retry. A result still flagged after the run means the retry didn't clear it — treat its `company`/`description` as possibly belonging to the previously-viewed job.
+- **`duplicateOfIdx`** — LinkedIn's guest pagination can re-serve an earlier page verbatim. Repeats are scraped in full and only marked: `null` on first (and only) occurrences, otherwise the index of the first job with the same `jobId`. Filter on `duplicateOfIdx === null` if you want each posting once. It stays `null` whenever `jobId` is `null`, since identity can't be established.
+
 ## Progress events
 
-`onProgress` is called with a `ScrapeProgressEvent` at each of these points:
+`onProgress` is optional. When passed, it's called synchronously with a `ScrapeProgressEvent` — a union discriminated on `type`:
 
-- `jobs:loading` — the unique job count grew during the scroll/click loading phase (`{ count }`).
-- `jobs:found` — loading finished; this is the total number of jobs about to be scraped (`{ total }`).
-- `job:start` — about to scrape the job at `index` out of `total` (`{ index, total }`).
-- `job:done` — a job finished scraping and the result looks trustworthy (`{ result }`).
-- `job:stale` — a job finished scraping but `isStaleResult(result)` is true: the scrape succeeded, but the detail-pane company disagreed with the list, or a sign-in overlay was still visible when the data was read. Fired instead of `job:done` for that job. A stale job gets one retry pass; the retry re-emits `job:done` if it comes back clean, or `job:stale` again if it doesn't.
+```ts
+type ScrapeProgressEvent =
+  | { type: 'jobs:loading'; count: number }
+  | { type: 'jobs:found'; total: number }
+  | { type: 'job:start'; index: number; total: number }
+  | { type: 'job:done'; result: JobResult }
+  | { type: 'job:stale'; result: JobResult };
+```
+
+- `jobs:loading` — the unique job count changed during the scroll/click loading phase (in practice, grew). `count` is the number of distinct posting IDs currently in the list, not a delta; it fires several times per run, and not at all if loading never makes progress.
+- `jobs:found` — loading finished; `total` is the number of jobs about to be scraped and is final for the run.
+- `job:start` — about to scrape the job at `index` (0-based) out of `total`.
+- `job:done` — a job finished scraping and the result looks trustworthy. This is also the event a `status: 'failed'` job emits — check `result.status`, don't assume done means scraped.
+- `job:stale` — a job finished scraping but `isStaleResult(result)` is true: the scrape succeeded, yet the detail-pane company disagreed with the list, or a sign-in overlay was still visible when the data was read. Emitted *instead of* `job:done` for that job, never both.
+
+Each job emits exactly one `job:start`, then exactly one of `job:done`/`job:stale`. Stale jobs get a single retry pass after the whole list has been scraped once, which re-emits the full trio for the same `index` — so a caller keying on `index` should overwrite, not append, and `total` is an upper bound on progress rather than an event count. `result` is the same object written into `outcome.results[index]`.
+
+Because the union is discriminated, a `switch (event.type)` narrows each branch:
+
+```ts
+onProgress: (event) => {
+  switch (event.type) {
+    case 'jobs:found':
+      console.log(`scraping ${event.total} jobs`);
+      break;
+    case 'job:stale':
+      console.warn(`job ${event.result.index} looked stale`);
+      break;
+  }
+}
+```
 
 `isStaleResult` is exported so callers can apply the same classification to any `JobResult` after the fact (e.g. when inspecting `outcome.results`) without re-deriving the condition themselves.
 
