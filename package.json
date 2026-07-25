@@ -1,0 +1,40 @@
+{
+  "name": "linkedin-job-scraper",
+  "version": "0.1.0",
+  "description": "Playwright-driven scraper for LinkedIn's public/guest job search results — no fixed search params, no login.",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/freshmozart1/linkedin-job-scraper.git"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "prepare": "npm run build",
+    "build": "tsc -p tsconfig.json",
+    "test": "node --import tsx --test \"test/*.test.ts\"",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json"
+  },
+  "keywords": [
+    "linkedin",
+    "playwright",
+    "scraper",
+    "jobs"
+  ],
+  "license": "ISC",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=22.9.0"
+  },
+  "dependencies": {
+    "playwright": "^1.61.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "tsx": "^4.23.1",
+    "typescript": "^7.0.2"
+  }
+}

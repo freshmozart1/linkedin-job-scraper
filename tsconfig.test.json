@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "sourceMap": false,
+    "declaration": false,
+    // The base config sets rootDir to "src" so the build emits dist/*.js flat.
+    // This program also includes test/**, which sits outside that root, so widen
+    // it — harmless here because noEmit means rootDir affects nothing else.
+    "rootDir": "."
+  },
+  "include": ["test/**/*.ts", "src/**/*.ts"]
+}

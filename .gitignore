@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.tsbuildinfo
+coverage/
+.fallow
+.playwright-mcp
+.claude
+.DS_Store
