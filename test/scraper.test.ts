@@ -6,6 +6,9 @@ import {
   isStaleResult,
   registerJobOccurrence,
   buildSearchUrl,
+  normalizeJobUrl,
+  hostnameOf,
+  jobIdFromUrl,
   clearBlockingOverlays,
   scrollLoadPhase,
   clickLoadPhase,
@@ -17,6 +20,7 @@ import {
   LIST_COMPANY_SELECTOR,
   COMPANY_SELECTOR,
   DESCRIPTION_SELECTOR,
+  JOB_LINK_SELECTOR,
   type JobResult,
   type ScrapeProgressEvent,
 } from '../src/index';
@@ -75,6 +79,57 @@ test('buildSearchUrl applies extraParams verbatim as an escape hatch', () => {
   assert.equal(url.searchParams.get('pageNum'), '2');
 });
 
+const SEARCH_PAGE_URL = 'https://de.linkedin.com/jobs/search?keywords=frontend';
+
+test('normalizeJobUrl returns null for a missing href', () => {
+  assert.equal(normalizeJobUrl(null, SEARCH_PAGE_URL), null);
+});
+
+test('normalizeJobUrl resolves a relative href against the search page URL', () => {
+  assert.equal(
+    normalizeJobUrl('/jobs/view/frontend-developer-at-acme-111', SEARCH_PAGE_URL),
+    'https://de.linkedin.com/jobs/view/frontend-developer-at-acme-111'
+  );
+});
+
+test('normalizeJobUrl keeps an absolute href on its own country subdomain', () => {
+  assert.equal(
+    normalizeJobUrl('https://uk.linkedin.com/jobs/view/x-111', SEARCH_PAGE_URL),
+    'https://uk.linkedin.com/jobs/view/x-111'
+  );
+});
+
+test('normalizeJobUrl strips the tracking query string and fragment', () => {
+  assert.equal(
+    normalizeJobUrl('https://de.linkedin.com/jobs/view/x-111?refId=a&trackingId=b&position=3#top', SEARCH_PAGE_URL),
+    'https://de.linkedin.com/jobs/view/x-111'
+  );
+});
+
+test('normalizeJobUrl returns null for a scheme that carries no hostname', () => {
+  assert.equal(normalizeJobUrl('javascript:void(0)', SEARCH_PAGE_URL), null);
+  assert.equal(normalizeJobUrl('mailto:jobs@acme.com', SEARCH_PAGE_URL), null);
+});
+
+test('hostnameOf reads the country-specific subdomain LinkedIn assigns the posting', () => {
+  assert.equal(hostnameOf('https://de.linkedin.com/jobs/view/x-111'), 'de.linkedin.com');
+});
+
+test('hostnameOf returns null rather than an empty string when there is no hostname', () => {
+  assert.equal(hostnameOf(null), null);
+  assert.equal(hostnameOf('not a url'), null);
+  assert.equal(hostnameOf('javascript:void(0)'), null);
+});
+
+test('jobIdFromUrl recovers the posting ID from a normalized job URL', () => {
+  assert.equal(jobIdFromUrl('https://de.linkedin.com/jobs/view/frontend-developer-at-acme-4012345678'), '4012345678');
+});
+
+test('jobIdFromUrl returns null when the URL has no trailing posting ID', () => {
+  assert.equal(jobIdFromUrl(null), null);
+  assert.equal(jobIdFromUrl('https://de.linkedin.com/jobs/search'), null);
+});
+
 test('isCompanyMismatch is false when the list company could not be read', () => {
   assert.equal(isCompanyMismatch({ listCompany: null, detailCompany: 'Acme Corp' }), false);
 });
@@ -99,12 +154,15 @@ function makeResult(partial: Partial<JobResult> & { index: number }): JobResult 
   return {
     title: null,
     company: null,
-    description: null,
+    descriptionText: null,
     status: 'success',
     error: null,
     companyMismatch: false,
     lateOverlayDetected: false,
-    jobId: null,
+    sourceJobId: null,
+    sourceUrl: null,
+    sourceHostname: null,
+    scrapedAt: '2024-01-01T00:00:00.000Z',
     duplicateOfIdx: null,
     ...partial,
   };
@@ -311,13 +369,28 @@ test('clickLoadPhase honors a caller-supplied clickRetryAttempts instead of the 
   assert.equal(clickAttempts, 1);
 });
 
+/** A single `getAttribute` call the scraper made against a job card. */
+interface AttributeRead {
+  name: string;
+  options?: { timeout?: number };
+}
+
 /** Builds a fake job-list `<li>` locator matching the exact chain scrapeJob() reads. */
 function makeJobLocator(opts: {
   title: string | null;
   listCompany: string | null;
-  jobId: string | null;
+  sourceJobId: string | null;
+  sourceUrl?: string | null;
   onClick?: () => void;
   hasTitle?: boolean;
+  /**
+   * Simulates `.base-card` being absent from the markup. Playwright's
+   * getAttribute auto-waits for the element and *rejects* on timeout — it
+   * does not resolve to null — so this throws rather than returning null.
+   */
+  entityUrnUnreadable?: boolean;
+  /** Collects every getAttribute call, so tests can assert reads are bounded. */
+  attributeReads?: AttributeRead[];
 }): Locator {
   const hasTitle = opts.hasTitle ?? true;
   return createFakeLocator({
@@ -341,7 +414,23 @@ function makeJobLocator(opts: {
         });
       }
       if (selector === '.base-card') {
-        return createFakeLocator({ getAttribute: () => (opts.jobId ? `urn:li:fsd_jobPosting:${opts.jobId}` : null) });
+        return createFakeLocator({
+          getAttribute: (name, options) => {
+            opts.attributeReads?.push({ name, options });
+            if (opts.entityUrnUnreadable) {
+              throw new Error('locator.getAttribute: Timeout 30000ms exceeded');
+            }
+            return opts.sourceJobId ? `urn:li:fsd_jobPosting:${opts.sourceJobId}` : null;
+          },
+        });
+      }
+      if (selector === JOB_LINK_SELECTOR) {
+        return createFakeLocator({
+          getAttribute: (name, options) => {
+            opts.attributeReads?.push({ name, options });
+            return opts.sourceUrl ?? null;
+          },
+        });
       }
       return createFakeLocator();
     },
@@ -364,7 +453,12 @@ function baseScrapeJobLocators(detailCompany: () => string | null, description =
 }
 
 test('scrapeJob returns a success result with the scraped title, company, and description', async () => {
-  const jobItem = makeJobLocator({ title: 'Frontend Developer', listCompany: 'Acme', jobId: '111' });
+  const jobItem = makeJobLocator({
+    title: 'Frontend Developer',
+    listCompany: 'Acme',
+    sourceJobId: '111',
+    sourceUrl: 'https://de.linkedin.com/jobs/view/frontend-developer-at-acme-111',
+  });
   const page = createFakePage({
     locatorsBySelector: {
       [JOB_LIST_SELECTOR]: createFakeLocator({ nth: () => jobItem }),
@@ -373,33 +467,40 @@ test('scrapeJob returns a success result with the scraped title, company, and de
     defaultLocator: createFakeLocator({ waitFor: () => {}, isVisible: () => false }),
   });
 
-  const result = await scrapeJob(page, 0, 1, { seenJobIds: new Map(), runTimestamp: 123 });
+  const result = await scrapeJob(page, 0, 1, { seenSourceJobIds: new Map(), runTimestamp: 123 });
 
   assert.equal(result.status, 'success');
   assert.equal(result.title, 'Frontend Developer');
   assert.equal(result.company, 'Acme');
-  assert.equal(result.description, 'A description.');
+  assert.equal(result.descriptionText, 'A description.');
   assert.equal(result.companyMismatch, false);
   assert.equal(result.lateOverlayDetected, false);
-  assert.equal(result.jobId, '111');
+  assert.equal(result.sourceJobId, '111');
+  assert.equal(result.sourceUrl, 'https://de.linkedin.com/jobs/view/frontend-developer-at-acme-111');
+  assert.equal(result.sourceHostname, 'de.linkedin.com');
+  assert.match(result.scrapedAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
   assert.equal(result.duplicateOfIdx, null);
 });
 
 test('scrapeJob skips a list item with no job title instead of scraping it as a job', async () => {
-  const jobItem = makeJobLocator({ title: null, listCompany: null, jobId: null, hasTitle: false });
+  const jobItem = makeJobLocator({ title: null, listCompany: null, sourceJobId: null, hasTitle: false });
   const page = createFakePage({
     locatorsBySelector: { [JOB_LIST_SELECTOR]: createFakeLocator({ nth: () => jobItem }) },
   });
 
-  const result = await scrapeJob(page, 7, 10, { seenJobIds: new Map(), runTimestamp: 123 });
+  const result = await scrapeJob(page, 7, 10, { seenSourceJobIds: new Map(), runTimestamp: 123 });
 
   assert.equal(result.status, 'skipped');
   assert.match(result.error ?? '', /not a real job card/i);
   assert.equal(result.index, 7);
+  assert.equal(result.sourceJobId, null);
+  assert.equal(result.sourceUrl, null);
+  assert.equal(result.sourceHostname, null);
+  assert.match(result.scrapedAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
 });
 
 test('scrapeJob marks a repeated posting ID as a duplicate of its first occurrence', async () => {
-  const jobItem = makeJobLocator({ title: 'Frontend Developer', listCompany: 'Acme', jobId: '111' });
+  const jobItem = makeJobLocator({ title: 'Frontend Developer', listCompany: 'Acme', sourceJobId: '111' });
   const page = createFakePage({
     locatorsBySelector: {
       [JOB_LIST_SELECTOR]: createFakeLocator({ nth: () => jobItem }),
@@ -407,9 +508,9 @@ test('scrapeJob marks a repeated posting ID as a duplicate of its first occurren
     },
     defaultLocator: createFakeLocator({ waitFor: () => {}, isVisible: () => false }),
   });
-  const seenJobIds = new Map<string, number>([['111', 0]]);
+  const seenSourceJobIds = new Map<string, number>([['111', 0]]);
 
-  const result = await scrapeJob(page, 3, 10, { seenJobIds, runTimestamp: 123 });
+  const result = await scrapeJob(page, 3, 10, { seenSourceJobIds, runTimestamp: 123 });
 
   assert.equal(result.status, 'success');
   assert.equal(result.duplicateOfIdx, 0);
@@ -425,10 +526,155 @@ test('scrapeJob returns a failed result when an unexpected error is thrown', asy
     locatorsBySelector: { [JOB_LIST_SELECTOR]: createFakeLocator({ nth: () => jobItem }) },
   });
 
-  const result = await scrapeJob(page, 2, 10, { seenJobIds: new Map(), runTimestamp: 123 });
+  const result = await scrapeJob(page, 2, 10, { seenSourceJobIds: new Map(), runTimestamp: 123 });
 
   assert.equal(result.status, 'failed');
   assert.match(result.error ?? '', /element detached from DOM/);
+  assert.equal(result.sourceJobId, null);
+  assert.equal(result.sourceUrl, null);
+  assert.equal(result.sourceHostname, null);
+  assert.match(result.scrapedAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+});
+
+test('scrapeJob fails after the click but still keeps the sourceJobId/sourceUrl captured during identity read', async () => {
+  const jobItem = makeJobLocator({
+    title: 'Frontend Developer',
+    listCompany: 'Acme',
+    sourceJobId: '111',
+    sourceUrl: 'https://www.linkedin.com/jobs/view/frontend-developer-at-acme-111',
+    onClick: () => {
+      throw new Error('click intercepted by another overlay');
+    },
+  });
+  const page = createFakePage({
+    locatorsBySelector: {
+      [JOB_LIST_SELECTOR]: createFakeLocator({ nth: () => jobItem }),
+      [OVERLAY_SELECTOR]: createFakeLocator({ isVisible: () => false }),
+    },
+  });
+
+  const result = await scrapeJob(page, 0, 1, { seenSourceJobIds: new Map(), runTimestamp: 123, clickRetryAttempts: 1 });
+
+  assert.equal(result.status, 'failed');
+  assert.equal(result.sourceJobId, '111');
+  assert.equal(result.sourceUrl, 'https://www.linkedin.com/jobs/view/frontend-developer-at-acme-111');
+  assert.equal(result.sourceHostname, 'www.linkedin.com');
+});
+
+/** Runs scrapeJob against one job card on an otherwise clean page (no overlay, detail pane resolves). */
+async function scrapeSingleJob(jobItem: Locator, pageUrl?: string): Promise<JobResult> {
+  const page = createFakePage({
+    url: pageUrl ? () => pageUrl : undefined,
+    locatorsBySelector: {
+      [JOB_LIST_SELECTOR]: createFakeLocator({ nth: () => jobItem }),
+      ...baseScrapeJobLocators(() => 'Acme'),
+    },
+    defaultLocator: createFakeLocator({ waitFor: () => {}, isVisible: () => false }),
+  });
+  return scrapeJob(page, 0, 1, { seenSourceJobIds: new Map(), runTimestamp: 123 });
+}
+
+test('scrapeJob resolves a relative job href against the search page URL', async () => {
+  const jobItem = makeJobLocator({
+    title: 'Frontend Developer',
+    listCompany: 'Acme',
+    sourceJobId: '111',
+    sourceUrl: '/jobs/view/frontend-developer-at-acme-111',
+  });
+
+  const result = await scrapeSingleJob(jobItem, 'https://de.linkedin.com/jobs/search?keywords=frontend');
+
+  assert.equal(result.sourceUrl, 'https://de.linkedin.com/jobs/view/frontend-developer-at-acme-111');
+  assert.equal(result.sourceHostname, 'de.linkedin.com');
+});
+
+test('scrapeJob strips per-session tracking params so sourceUrl is stable across runs', async () => {
+  const jobItem = makeJobLocator({
+    title: 'Frontend Developer',
+    listCompany: 'Acme',
+    sourceJobId: '111',
+    sourceUrl:
+      'https://de.linkedin.com/jobs/view/frontend-developer-at-acme-111?refId=xY7%2Fabc&trackingId=Qk9%3D&position=3&pageNum=0&trk=public_jobs_jserp-result_search-card',
+  });
+
+  const result = await scrapeSingleJob(jobItem);
+
+  assert.equal(result.sourceUrl, 'https://de.linkedin.com/jobs/view/frontend-developer-at-acme-111');
+  assert.equal(result.sourceHostname, 'de.linkedin.com');
+});
+
+test('scrapeJob nulls sourceUrl and sourceHostname for an href with no hostname', async () => {
+  // `new URL('javascript:void(0)')` parses without throwing and yields an
+  // empty-string hostname, so this needs handling beyond a try/catch.
+  const jobItem = makeJobLocator({
+    title: 'Frontend Developer',
+    listCompany: 'Acme',
+    sourceJobId: '111',
+    sourceUrl: 'javascript:void(0)',
+  });
+
+  const result = await scrapeSingleJob(jobItem);
+
+  assert.equal(result.status, 'success');
+  assert.equal(result.sourceUrl, null);
+  assert.equal(result.sourceHostname, null);
+});
+
+test('scrapeJob returns a success result with null source URL fields when the card has no job link', async () => {
+  const jobItem = makeJobLocator({
+    title: 'Frontend Developer',
+    listCompany: 'Acme',
+    sourceJobId: '111',
+    sourceUrl: null,
+  });
+
+  const result = await scrapeSingleJob(jobItem);
+
+  assert.equal(result.status, 'success');
+  assert.equal(result.sourceUrl, null);
+  assert.equal(result.sourceHostname, null);
+});
+
+test('scrapeJob falls back to the href for sourceJobId when data-entity-urn is unreadable', async () => {
+  const jobItem = makeJobLocator({
+    title: 'Frontend Developer',
+    listCompany: 'Acme',
+    sourceJobId: null,
+    entityUrnUnreadable: true,
+    sourceUrl: 'https://de.linkedin.com/jobs/view/frontend-developer-at-acme-4012345678?refId=abc',
+  });
+
+  const result = await scrapeSingleJob(jobItem);
+
+  // A failed urn read must not take the whole identity down with it: the
+  // posting ID is recoverable from the href, and duplicate detection plus
+  // the detail-pane wait both depend on having it.
+  assert.equal(result.status, 'success');
+  assert.equal(result.sourceJobId, '4012345678');
+  assert.equal(result.sourceUrl, 'https://de.linkedin.com/jobs/view/frontend-developer-at-acme-4012345678');
+});
+
+test('scrapeJob bounds every card attribute read with an explicit timeout', async () => {
+  // Without an explicit timeout these inherit Playwright's 30s default, so a
+  // renamed class turns into half an hour of dead wait on a 120-job run.
+  const attributeReads: AttributeRead[] = [];
+  const jobItem = makeJobLocator({
+    title: 'Frontend Developer',
+    listCompany: 'Acme',
+    sourceJobId: '111',
+    sourceUrl: 'https://de.linkedin.com/jobs/view/frontend-developer-at-acme-111',
+    attributeReads,
+  });
+
+  await scrapeSingleJob(jobItem);
+
+  assert.ok(attributeReads.length >= 2, 'expected both the urn and href reads to be recorded');
+  for (const read of attributeReads) {
+    assert.ok(
+      typeof read.options?.timeout === 'number' && read.options.timeout <= 1000,
+      `getAttribute(${read.name}) was given no bounded timeout: ${JSON.stringify(read.options)}`
+    );
+  }
 });
 
 test('scrapeAllJobsOnce collects the indices of jobs whose detail-pane company mismatches the list', async () => {
@@ -436,7 +682,7 @@ test('scrapeAllJobsOnce collects the indices of jobs whose detail-pane company m
   const cleanJob = makeJobLocator({
     title: 'Frontend Developer',
     listCompany: 'Acme',
-    jobId: '111',
+    sourceJobId: '111',
     onClick: () => {
       currentDetailCompany = 'Acme';
     },
@@ -444,7 +690,7 @@ test('scrapeAllJobsOnce collects the indices of jobs whose detail-pane company m
   const staleJob = makeJobLocator({
     title: 'Backend Developer',
     listCompany: 'Acme',
-    jobId: '222',
+    sourceJobId: '222',
     onClick: () => {
       currentDetailCompany = 'Globex Corporation';
     },
@@ -459,7 +705,7 @@ test('scrapeAllJobsOnce collects the indices of jobs whose detail-pane company m
   });
 
   const staleIndices = await scrapeAllJobsOnce(
-    { page, totalJobs: 2, seenJobIds: new Map(), runTimestamp: 123, delayBetweenJobsMs: 0 },
+    { page, totalJobs: 2, seenSourceJobIds: new Map(), runTimestamp: 123, delayBetweenJobsMs: 0 },
     []
   );
 
@@ -471,7 +717,7 @@ test('scrapeAllJobsOnce emits job:done for a clean result and job:stale for a st
   const cleanJob = makeJobLocator({
     title: 'Frontend Developer',
     listCompany: 'Acme',
-    jobId: '111',
+    sourceJobId: '111',
     onClick: () => {
       currentDetailCompany = 'Acme';
     },
@@ -479,7 +725,7 @@ test('scrapeAllJobsOnce emits job:done for a clean result and job:stale for a st
   const staleJob = makeJobLocator({
     title: 'Backend Developer',
     listCompany: 'Acme',
-    jobId: '222',
+    sourceJobId: '222',
     onClick: () => {
       currentDetailCompany = 'Globex Corporation';
     },
@@ -495,7 +741,7 @@ test('scrapeAllJobsOnce emits job:done for a clean result and job:stale for a st
   const progressEvents: ScrapeProgressEvent[] = [];
 
   await scrapeAllJobsOnce(
-    { page, totalJobs: 2, seenJobIds: new Map(), runTimestamp: 123, delayBetweenJobsMs: 0, onProgress: (e) => progressEvents.push(e) },
+    { page, totalJobs: 2, seenSourceJobIds: new Map(), runTimestamp: 123, delayBetweenJobsMs: 0, onProgress: (e) => progressEvents.push(e) },
     []
   );
 
@@ -511,7 +757,7 @@ test('a job that comes back clean on a later scrapeAllJobsOnce pass emits job:do
     makeJobLocator({
       title: 'Backend Developer',
       listCompany: 'Acme',
-      jobId: '222',
+      sourceJobId: '222',
       onClick: () => {}, // detail company left as-is by this click
     }),
   ];
@@ -527,7 +773,7 @@ test('a job that comes back clean on a later scrapeAllJobsOnce pass emits job:do
   const ctx = {
     page,
     totalJobs: 1,
-    seenJobIds: new Map<string, number>(),
+    seenSourceJobIds: new Map<string, number>(),
     runTimestamp: 123,
     delayBetweenJobsMs: 0,
     onProgress: (e: ScrapeProgressEvent) => firstPassEvents.push(e),
@@ -555,7 +801,7 @@ test('a job that comes back clean on a later scrapeAllJobsOnce pass emits job:do
 test('a job that is still stale on a later scrapeAllJobsOnce pass emits job:stale again (failed-retry simulation)', async () => {
   const currentDetailCompany = 'Globex Corporation'; // stays mismatched across both passes
   const jobLocators = [
-    makeJobLocator({ title: 'Backend Developer', listCompany: 'Acme', jobId: '222', onClick: () => {} }),
+    makeJobLocator({ title: 'Backend Developer', listCompany: 'Acme', sourceJobId: '222', onClick: () => {} }),
   ];
   const page = createFakePage({
     locatorsBySelector: {
@@ -567,7 +813,7 @@ test('a job that is still stale on a later scrapeAllJobsOnce pass emits job:stal
   const ctx = {
     page,
     totalJobs: 1,
-    seenJobIds: new Map<string, number>(),
+    seenSourceJobIds: new Map<string, number>(),
     runTimestamp: 123,
     delayBetweenJobsMs: 0,
   };

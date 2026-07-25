@@ -13,3 +13,4 @@ export const LIST_COMPANY_SELECTOR = 'h4.base-search-card__subtitle';
 export const COMPANY_SELECTOR = '.topcard__org-name-link';
 export const DESCRIPTION_SELECTOR = '.description__text';
 export const OVERLAY_SELECTOR = '.modal__overlay--visible';
+export const JOB_LINK_SELECTOR = '.base-card__full-link';
