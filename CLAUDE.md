@@ -53,6 +53,8 @@ The overlay selector stays narrow (`.modal__overlay--visible`) on purpose — a 
 
 LinkedIn's detail pane sometimes doesn't re-render when cards are clicked quickly: the title link updates but the rest of the pane is left over from the previous job. Two flags catch this per job — `companyMismatch` (list-pane company vs. detail-pane company disagree) and `lateOverlayDetected` (an overlay was visible right when data was read). `isStaleResult()` folds both into one predicate, and it excludes `status: 'failed'` implicitly because the catch block forces both flags false on failure.
 
+`companyMismatch` only compares company text, so it has a blind spot: a pane left over from an *earlier posting at the same company* reads as a match and is never flagged. `descriptionText` and `tags` both come from that same unguarded pane read, so a stale same-company pane can silently carry the earlier job's description/tags. A deeper fix would need a detail-pane job-ID marker to compare against, not just company text — not implemented, since no such marker has been identified in the detail pane yet.
+
 Stale jobs get **exactly one** retry, deferred until the whole list has been scraped once (`retryStaleJobs`) — by then the page has settled, and the extra pre-click delay doesn't compound into every job. `scrapeJobAndRecord` writes `results[index] = result` (indexed write, not `push`) precisely so a retry replaces rather than appends.
 
 ### Identity reads are bounded, concurrent, and individually recoverable

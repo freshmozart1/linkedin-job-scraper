@@ -34,9 +34,19 @@ export interface JobResult {
   index: number;
   title: string | null;
   company: string | null;
+  /** Detail-pane job description text. Subject to the same-company staleness blind spot documented on `companyMismatch`. */
   descriptionText: string | null;
   status: JobStatus;
   error: string | null;
+  /**
+   * Whether the detail-pane company disagreed with the list-pane company for
+   * this job — the primary signal `isStaleResult` uses to catch a detail pane
+   * that didn't re-render after a click. It cannot catch a pane left over
+   * from an earlier posting at the *same* company: two back-to-back postings
+   * from the same employer read as a match here even if the pane never
+   * updated, so `descriptionText`/`tags` can silently carry the earlier
+   * job's values in that case.
+   */
   companyMismatch: boolean;
   /** Whether a LinkedIn sign-in overlay was detected reappearing late, around when this job's data was read. */
   lateOverlayDetected: boolean;
@@ -118,7 +128,8 @@ export interface JobResult {
    * `[]` and `null` are distinct, the same way they are for
    * `companyAddresses`: `[]` means the detail pane was read and the job
    * genuinely lists no criteria, whereas `null` means the read never
-   * happened or failed.
+   * happened or failed. Subject to the same-company staleness blind spot
+   * documented on `companyMismatch`.
    */
   tags: string[] | null;
 }

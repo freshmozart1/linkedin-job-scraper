@@ -53,7 +53,10 @@ export function createFakeLocator(config: FakeLocatorConfig = {}): Locator {
     scrollIntoViewIfNeeded: async () => {
       if (config.scrollIntoViewIfNeeded) await config.scrollIntoViewIfNeeded();
     },
-    allInnerTexts: async () => (config.allInnerTexts ? config.allInnerTexts() : []),
+    allInnerTexts: async () => {
+      if (!config.allInnerTexts) throw new Error('fake locator: allInnerTexts not configured');
+      return config.allInnerTexts();
+    },
   };
   return locator as unknown as Locator;
 }

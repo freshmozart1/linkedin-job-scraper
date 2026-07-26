@@ -409,6 +409,8 @@ function makeJobLocator(opts: {
   location?: string | null;
   /** The list card's `datetime` attribute. */
   postedAt?: string | null;
+  /** Simulates the postedAt getAttribute call rejecting (e.g. a genuine timeout), mirroring entityUrnUnreadable. */
+  postedAtUnreadable?: boolean;
 }): Locator {
   const hasTitle = opts.hasTitle ?? true;
   return createFakeLocator({
@@ -470,6 +472,9 @@ function makeJobLocator(opts: {
         return createFakeLocator({
           getAttribute: (name, options) => {
             opts.attributeReads?.push({ name, options });
+            if (opts.postedAtUnreadable) {
+              throw new Error('locator.getAttribute: Timeout 30000ms exceeded');
+            }
             return opts.postedAt ?? null;
           },
         });
@@ -908,6 +913,36 @@ test('scrapeJob nulls location and postedAt when the card carries neither elemen
   assert.equal(result.postedAt, null);
 });
 
+test('scrapeJob nulls location and postedAt when the elements are present but empty', async () => {
+  const jobItem = makeJobLocator({
+    title: 'Frontend Developer',
+    listCompany: 'Acme',
+    sourceJobId: '111',
+    location: '',
+    postedAt: '',
+  });
+
+  const result = await scrapeSingleJob(jobItem);
+
+  assert.equal(result.status, 'success');
+  assert.equal(result.location, null);
+  assert.equal(result.postedAt, null);
+});
+
+test('scrapeJob nulls postedAt when the datetime read throws', async () => {
+  const jobItem = makeJobLocator({
+    title: 'Frontend Developer',
+    listCompany: 'Acme',
+    sourceJobId: '111',
+    postedAtUnreadable: true,
+  });
+
+  const result = await scrapeSingleJob(jobItem);
+
+  assert.equal(result.status, 'success');
+  assert.equal(result.postedAt, null);
+});
+
 test('scrapeJob returns the tags read from the detail pane job-criteria list', async () => {
   const jobItem = makeJobLocator({ title: 'Frontend Developer', listCompany: 'Acme', sourceJobId: '111' });
   const page = createFakePage({
@@ -970,6 +1005,54 @@ test('scrapeJob nulls tags when the job-criteria read throws', async () => {
 
   assert.equal(result.status, 'success');
   assert.equal(result.tags, null);
+});
+
+test('scrapeJob waits for the job-criteria list to attach before reading tags', async () => {
+  const calls: string[] = [];
+  const jobItem = makeJobLocator({ title: 'Frontend Developer', listCompany: 'Acme', sourceJobId: '111' });
+  const page = createFakePage({
+    locatorsBySelector: {
+      [JOB_LIST_SELECTOR]: createFakeLocator({ nth: () => jobItem }),
+      ...baseScrapeJobLocators(() => 'Acme'),
+      [JOB_CRITERIA_VALUE_SELECTOR]: createFakeLocator({
+        waitFor: () => {
+          calls.push('waitFor');
+        },
+        allInnerTexts: () => {
+          calls.push('allInnerTexts');
+          return ['Full-time'];
+        },
+      }),
+    },
+    defaultLocator: createFakeLocator({ waitFor: () => {}, isVisible: () => false }),
+  });
+
+  const result = await scrapeJob(page, 0, 1, { seenSourceJobIds: new Map(), runTimestamp: 123, companyLookup: stubCompanyLookup() });
+
+  assert.deepEqual(calls, ['waitFor', 'allInnerTexts']);
+  assert.deepEqual(result.tags, ['Full-time']);
+});
+
+test('scrapeJob still reads tags when the job-criteria attach-wait itself times out', async () => {
+  const jobItem = makeJobLocator({ title: 'Frontend Developer', listCompany: 'Acme', sourceJobId: '111' });
+  const page = createFakePage({
+    locatorsBySelector: {
+      [JOB_LIST_SELECTOR]: createFakeLocator({ nth: () => jobItem }),
+      ...baseScrapeJobLocators(() => 'Acme'),
+      [JOB_CRITERIA_VALUE_SELECTOR]: createFakeLocator({
+        waitFor: () => {
+          throw new Error('locator.waitFor: Timeout 1000ms exceeded');
+        },
+        allInnerTexts: () => ['Full-time'],
+      }),
+    },
+    defaultLocator: createFakeLocator({ waitFor: () => {}, isVisible: () => false }),
+  });
+
+  const result = await scrapeJob(page, 0, 1, { seenSourceJobIds: new Map(), runTimestamp: 123, companyLookup: stubCompanyLookup() });
+
+  assert.equal(result.status, 'success');
+  assert.deepEqual(result.tags, ['Full-time']);
 });
 
 test('scrapeAllJobsOnce collects the indices of jobs whose detail-pane company mismatches the list', async () => {

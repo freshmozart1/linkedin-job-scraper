@@ -396,18 +396,21 @@ async function readJobIdentity(jobItem: Locator, baseUrl: string): Promise<JobId
       .getAttribute('href', { timeout: 1000 })
       .catch(() => null),
     // Scraped verbatim, no parsing — exactly one location span per card.
+    // A present-but-empty span normalizes to null, same as a missing one.
     jobItem
       .locator(LIST_LOCATION_SELECTOR)
       .first()
       .innerText({ timeout: 1000 })
-      .then((t) => t.trim())
+      .then((t) => t.trim() || null)
       .catch(() => null),
     // The datetime attribute (e.g. '2026-07-21'), not the relative display
-    // text ("5 days ago"), which goes stale the moment it's stored.
+    // text ("5 days ago"), which goes stale the moment it's stored. A
+    // present-but-empty attribute normalizes to null, same as a missing one.
     jobItem
       .locator(LIST_POSTED_AT_SELECTOR)
       .first()
       .getAttribute('datetime', { timeout: 1000 })
+      .then((v) => v?.trim() || null)
       .catch(() => null),
   ]);
 
@@ -483,12 +486,18 @@ async function readDetailPane(
       .then((t) => t.trim())
       .catch(() => null),
     // Values only, not labels. allInnerTexts() takes no timeout and doesn't
-    // auto-wait, so there's no dead-wait risk to guard against here; the
-    // catch distinguishes a genuine exception (null) from a clean zero-match
-    // resolution ([], the job genuinely lists no criteria).
+    // auto-wait, unlike company/descriptionText above — so wait for the
+    // first match to attach first, bounded the same way every other read in
+    // this file is, or a criteria block that renders a beat after the title/
+    // company block would silently resolve to [] before it ever appears.
+    // The catch distinguishes a genuine exception (null) from a clean
+    // zero-match resolution ([], the job genuinely lists no criteria).
     page
       .locator(JOB_CRITERIA_VALUE_SELECTOR)
-      .allInnerTexts()
+      .first()
+      .waitFor({ state: 'attached', timeout: 1000 })
+      .catch(() => {})
+      .then(() => page.locator(JOB_CRITERIA_VALUE_SELECTOR).allInnerTexts())
       .then((texts) => texts.map((t) => t.trim()).filter(Boolean))
       .catch(() => null),
   ]);
@@ -498,8 +507,9 @@ async function readDetailPane(
 // The "sign in to view more jobs" nag can render asynchronously at any point
 // (see file header comment), including in the gap after the text reads —
 // re-check right before finishing this job so a late-appearing overlay
-// doesn't silently taint the already-read company/description data without
-// being flagged. Returns whether the overlay was still visible at that point.
+// doesn't silently taint the already-read company/description/tags data
+// without being flagged. Returns whether the overlay was still visible at
+// that point.
 async function checkForLateOverlay(page: Page): Promise<boolean> {
   const dismissed = await clearBlockingOverlays(page, {
     timeoutMs: 3000,
