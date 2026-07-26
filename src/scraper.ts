@@ -644,13 +644,18 @@ export const runScrape: RunScraper = async ({ onProgress, searchParams, scraperO
   const searchUrl = buildSearchUrl(searchParams);
 
   const browser = await chromium.launch({ headless: scraperOptions?.headless ?? false });
-  const context = await browser.newContext({ viewport: scraperOptions?.viewport ?? { width: 1440, height: 900 } });
-  const page = await context.newPage();
-  // Its own context, not this one — the lookup clears cookies before every
-  // company page it opens, which would throw away the guest search session.
-  const companyLookup = await createCompanyLookup(browser, scraperOptions?.companyLookup);
+  // Everything past the launch belongs inside the try: each step below can
+  // throw, and from here on there is a real Chromium process that has to be
+  // closed. (A failing `launch` leaves nothing to clean up, so it stays out.)
+  let companyLookup: CompanyLookup | null = null;
 
   try {
+    const context = await browser.newContext({ viewport: scraperOptions?.viewport ?? { width: 1440, height: 900 } });
+    const page = await context.newPage();
+    // Its own context, not this one — the lookup clears cookies before every
+    // company page it opens, which would throw away the guest search session.
+    companyLookup = await createCompanyLookup(browser, scraperOptions?.companyLookup);
+
     await page.goto(searchUrl, { waitUntil: 'domcontentloaded' });
 
     await clearBlockingOverlays(page, {
@@ -679,7 +684,8 @@ export const runScrape: RunScraper = async ({ onProgress, searchParams, scraperO
 
     return { results, url: searchUrl };
   } finally {
-    await companyLookup.close().catch(() => { });
+    // Optional-chained: setup can now throw before the lookup exists.
+    await companyLookup?.close().catch(() => { });
     await browser.close();
   }
 };

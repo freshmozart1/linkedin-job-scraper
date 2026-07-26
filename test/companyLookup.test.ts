@@ -123,6 +123,32 @@ test('addressesFor gives up with an empty array when the retry is also empty', a
   assert.equal(pending.recorder.gotos.length, 2);
 });
 
+test('addressesFor keeps a successful empty read when the retry then fails', async () => {
+  // A transient failure on the retry is not evidence about what the company
+  // publishes — the first attempt already read the page, so `[]` stands.
+  // Downgrading it to null would claim the lookup never succeeded, and that
+  // null gets cached for the rest of the run.
+  let gotos = 0;
+  const lookup = await makeLookup({
+    locationsFor: () => [],
+    onGoto: () => {
+      if (++gotos === 2) throw new Error('net::ERR_TIMED_OUT');
+    },
+  });
+
+  assert.deepEqual(await lookup.addressesFor(YATTA), []);
+});
+
+test('addressesFor keeps a successful empty read when the retry hits the auth wall', async () => {
+  let gotos = 0;
+  const lookup = await makeLookup({
+    locationsFor: () => [],
+    landsOn: (url) => (++gotos === 2 ? 'https://www.linkedin.com/authwall?trk=bf' : url),
+  });
+
+  assert.deepEqual(await lookup.addressesFor(YATTA), []);
+});
+
 test('addressesFor honours emptyRetries: 0 by not retrying at all', async () => {
   const pending = makeLookup({ locationsFor: () => [], emptyRetries: 0 });
   const lookup = await pending;

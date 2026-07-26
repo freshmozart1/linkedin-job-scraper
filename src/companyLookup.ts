@@ -22,15 +22,20 @@ import type { CompanyAddress, RawCompanyLocation } from './types';
 export interface CompanyLookupOptions {
   navigationTimeoutMs?: number;
   /**
-   * Extra attempts when a page loads but shows no Locations section. LinkedIn
-   * serves that section intermittently — the same company can come back with
-   * addresses on one load and empty on the next — so one cheap retry recovers
-   * a meaningful slice of the misses.
+   * Extra attempts whenever an attempt yields no addresses — named for the
+   * case it exists for (a page that loads with its Locations section absent,
+   * which LinkedIn serves intermittently: the same company can come back with
+   * addresses on one load and empty on the next), but the same budget also
+   * covers an `/authwall` bounce and a navigation that throws. So
+   * `emptyRetries: 0` disables retrying those too, not just empty pages.
    */
   emptyRetries?: number;
   /** Pause after a lookup that hit the network. Cache hits skip it entirely. */
   delayBetweenLookupsMs?: number;
-  /** Optional cap on how many addresses to keep per company; the primary always survives it. */
+  /**
+   * Optional cap on how many addresses to keep per company. The list is
+   * primary-first, so any cap of 1 or more keeps the primary address.
+   */
   maxAddressesPerCompany?: number;
 }
 
@@ -118,7 +123,11 @@ export async function createCompanyLookup(
   const cache = new Map<string, CompanyAddress[] | null>();
 
   async function fetchAddresses(companyUrl: string): Promise<CompanyAddress[] | null> {
-    let lastResult: CompanyAddress[] | null = null;
+    // Only a successful read writes here, so a failing retry can never downgrade
+    // an earlier `[]` (page read, company publishes nothing) into null (nothing
+    // could be read at all). Those two are different answers downstream, and the
+    // loser of that race gets cached for the rest of the run.
+    let bestResult: CompanyAddress[] | null = null;
 
     for (let attempt = 0; attempt <= emptyRetries; attempt++) {
       try {
@@ -127,22 +136,21 @@ export async function createCompanyLookup(
         await context.clearCookies();
         await page.goto(companyUrl, { waitUntil: 'domcontentloaded', timeout: navigationTimeoutMs });
 
-        if (isAuthWall(page.url())) {
-          lastResult = null;
-          continue;
-        }
+        if (isAuthWall(page.url())) continue;
 
         const addresses = toCompanyAddresses(await readRawLocations(page));
-        lastResult = addresses;
         // An empty result is either a company with no published address or a
         // page served without its section — indistinguishable, so retry it.
         if (addresses.length > 0) return addresses;
+        bestResult = addresses;
       } catch {
-        lastResult = null;
+        // Left alone deliberately: a navigation that blew up says nothing
+        // about what the company publishes, so it must not overwrite a read
+        // that already succeeded.
       }
     }
 
-    return lastResult;
+    return bestResult;
   }
 
   return {

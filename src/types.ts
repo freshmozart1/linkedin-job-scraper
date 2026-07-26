@@ -187,11 +187,15 @@ export interface ScraperOptions {
   /** Timings and limits for the company-page address lookup; see `createCompanyLookup`. */
   companyLookup?: {
     navigationTimeoutMs?: number;
-    /** Extra attempts when a company page loads but shows no Locations section — LinkedIn serves that section intermittently. */
+    /**
+     * Extra attempts whenever an attempt yields no addresses: a company page that loads with no
+     * Locations section (LinkedIn serves it intermittently), an `/authwall` bounce, or a
+     * navigation error. `0` disables retrying all three, not just the empty-section case.
+     */
     emptyRetries?: number;
     /** Pause after a lookup that actually hit the network; cache hits are not delayed. */
     delayBetweenLookupsMs?: number;
-    /** Optional cap on addresses kept per company (some publish 100+). The primary address is always kept. */
+    /** Optional cap on addresses kept per company (some publish 100+). The list is primary-first, so any cap of 1 or more keeps the primary. */
     maxAddressesPerCompany?: number;
   };
 }

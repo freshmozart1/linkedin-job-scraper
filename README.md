@@ -45,7 +45,7 @@ Every engine tuning constant (browser `headless`/`viewport`, scroll/click retry 
 scraperOptions: {
   companyLookup: {
     navigationTimeoutMs: 20000,    // per company page load
-    emptyRetries: 1,               // extra attempts when a page loads with no Locations section
+    emptyRetries: 1,               // extra attempts when an attempt yields no addresses: no Locations section, an authwall bounce, or a navigation error
     delayBetweenLookupsMs: 900,    // pause after a lookup that hit the network; cache hits skip it
     maxAddressesPerCompany: 10,    // default: uncapped — some companies publish 100+
   },

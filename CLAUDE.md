@@ -57,11 +57,11 @@ Stale jobs get **exactly one** retry, deferred until the whole list has been scr
 
 ### Identity reads are bounded, concurrent, and individually recoverable
 
-`readJobIdentity` reads four things off the list item (title, list company, `data-entity-urn`, job href) in one `Promise.all`. Three properties there are load-bearing:
+`readJobIdentity` reads five things off the list item (title, list company, `data-entity-urn`, job href, company href) in one `Promise.all`. Three properties there are load-bearing:
 
 - **Every read carries an explicit `{ timeout: 1000 }`.** Playwright's default is 30s and its `getAttribute`/`innerText` auto-wait for the element, so an unbounded read turns one renamed class into ~30s of dead wait *per job* — an hour on a 120-job run, with nothing surfaced.
 - **Every read has its own `.catch(() => null)`.** An unguarded rejection takes down the whole identity, including the `sourceUrl` that is specifically supposed to survive a later failure.
-- **They're concurrent** because they have no data dependency on each other; sequentially, the degenerate all-missing case costs 4× the timeout.
+- **They're concurrent** because they have no data dependency on each other; sequentially, the degenerate all-missing case costs 5× the timeout.
 
 `sourceJobId` prefers `data-entity-urn` but falls back to the trailing ID in `sourceUrl`. That fallback matters more than it looks: a null `sourceJobId` silently disables duplicate detection *and* makes `waitForJobDetailToLoad` skip its detail-pane wait entirely — which is the exact condition that manufactures stale results. Two independent carriers of the same ID means one attribute rename doesn't take both mechanisms down.
 
@@ -92,7 +92,9 @@ This is also why the lookup runs on a **dedicated context**: clearing cookies on
 Two more constraints from the same investigation:
 
 - **`fetch()` is answered with HTTP 999.** There is no request-only shortcut; the page has to be genuinely navigated to.
-- **Coverage is ~70%, and the section is intermittent.** The same company can answer with addresses on one load and nothing on the next, so an empty result gets `emptyRetries` (default 1) more attempts. The remaining ~30% genuinely publish nothing. Don't read a partial result as a broken selector.
+- **Coverage is ~70%, and the section is intermittent.** The same company can answer with addresses on one load and nothing on the next, so an empty result gets `emptyRetries` (default 1) more attempts — that same budget also covers an `/authwall` bounce and a navigation that throws, so setting it to 0 disables all three. The remaining ~30% genuinely publish nothing. Don't read a partial result as a broken selector.
+
+Retries only ever *upgrade* the answer: a failed attempt never overwrites an earlier successful read, because `[]` (page read, company publishes nothing) and `null` (nothing could be read) are distinct answers on `JobResult.companyAddresses` and the loser gets cached for the rest of the run.
 
 Parsing notes worth keeping: the **last `<p>` in a location `<li>` is always the locality line** and everything before it is street — reading the *first* line as the street breaks every address that has no street block. The primary address is marked by the presence of a `.tag-sm` span, matched on presence rather than its "Primary" text, which is subject to localization. Collapsed locations past the first four are hidden with CSS only and are already in the DOM, so nothing needs clicking — but `innerText` returns empty for them, which is why the evaluate reads `textContent`.
 

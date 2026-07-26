@@ -75,8 +75,6 @@ export interface FakePageConfig {
   url?: () => string;
   /** Company-page navigation. Receives the URL so tests can count and assert on loads. */
   goto?: (url: string, options?: { waitUntil?: string; timeout?: number }) => void | Promise<void>;
-  /** The context this page belongs to; companyLookup calls clearCookies() on it before every goto. */
-  context?: () => BrowserContext;
 }
 
 export function createFakePage(config: FakePageConfig = {}): Page {
@@ -91,7 +89,6 @@ export function createFakePage(config: FakePageConfig = {}): Page {
       if (config.goto) await config.goto(url, options);
       return null;
     },
-    context: () => config.context?.() ?? createFakeContext(),
   };
   return page as unknown as Page;
 }
