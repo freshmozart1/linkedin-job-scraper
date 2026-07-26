@@ -2,6 +2,28 @@
 
 All notable changes to this project are documented in this file.
 
+## v0.3.0
+
+> `JobResult` gains two required properties, so any code constructing or
+> spreading a `JobResult` literal must supply them. Every run now also visits
+> LinkedIn company pages, which makes a scrape take meaningfully longer.
+
+### Added
+
+- `JobResult.companyAddresses` — the office addresses published on the hiring company's LinkedIn page, as `CompanyAddress[]`, **with the address LinkedIn tags "Primary" at index 0**. `[]` and `null` are distinct: `[]` means the page was read and the company publishes no address, `null` means no lookup happened or it failed. Roughly 30% of companies genuinely publish none.
+- `JobResult.companyUrl` — the absolute, normalized URL of that company page, read from the card's company link (`h4.base-search-card__subtitle a`) during the same identity read as `sourceUrl`, so it survives a later click/detail-pane failure. This is also the key the run's address cache uses; the company *display name* is deliberately not used, since LinkedIn abbreviates it in the list ("Slalom" for `slalom-consulting`) in ways that collide between unrelated companies.
+- `CompanyAddress` and `RawCompanyLocation` types. `CompanyAddress` is `{ streetAddress, city, postalCode, countryCode }`, all nullable. `postalCode` holds the region and postal code together (`'Hessen 60313'`, `'WA 98104'`) because LinkedIn renders them joined with a plain space and no separator that distinguishes them.
+- `ScraperOptions.companyLookup` — `navigationTimeoutMs` (20000), `emptyRetries` (1), `delayBetweenLookupsMs` (900) and `maxAddressesPerCompany` (uncapped), all optional and defaulted in the engine like every other tuning constant.
+- `src/address.ts`, exporting the pure parsers `parseLocalityLine`, `parseCompanyLocation` and `toCompanyAddresses`, so a stored company page can be re-parsed without re-scraping.
+- `src/companyLookup.ts`, exporting `createCompanyLookup(browser, options)` and the `CompanyLookup` interface, usable on its own to resolve addresses for a list of company URLs.
+- `normalizeCompanyUrl` exported from `src/url.ts`, and `LIST_COMPANY_LINK_SELECTOR`, `COMPANY_LOCATIONS_SECTION_SELECTOR`, `COMPANY_LOCATION_ITEM_SELECTOR` and `COMPANY_PRIMARY_TAG_SELECTOR` from `src/selectors.ts`.
+
+### Changed
+
+- `runScrape` now opens **two** browser contexts inside the browser it launches: one for the job search, one for company pages. The company context clears its cookies before every navigation, because LinkedIn only serves a company page's Locations section to a cookie jar that hasn't already seen one — reusing a context makes the second company onwards come back with the section silently absent, which is indistinguishable from a company with no address. Clearing cookies on the search context instead would discard the guest job session, hence the separate context.
+- `ScrapeJobOptions` and `ScrapeContext` gain a required `companyLookup` property.
+- `normalizeJobUrl` and `normalizeCompanyUrl` are now two names over one shared internal normalizer; `normalizeJobUrl`'s behavior is unchanged.
+
 ## v0.2.0
 
 > **Breaking release.** `JobResult` renames two fields and gains a required

@@ -85,7 +85,7 @@ export function buildSearchUrl(params: SearchParams): string {
 // ---------------------------------------------------------------------------
 
 /**
- * Turns a scraped job `href` into a stable, absolute job URL, or null when it
+ * Turns a scraped `href` into a stable, absolute LinkedIn URL, or null when it
  * isn't one.
  *
  * Three things happen here, each for a reason:
@@ -94,14 +94,15 @@ export function buildSearchUrl(params: SearchParams): string {
  *   guest search re-renders client-side and never navigates, so the search URL
  *   remains a correct base for the whole run.
  * - **Dropping the query and fragment.** The card href carries a per-session
- *   `refId`/`trackingId` plus `position`/`pageNum`, so the same posting yields
- *   a different URL on every run — which breaks any consumer deduping or
- *   upserting on this field. `position`/`pageNum` also just restate `index`.
+ *   `refId`/`trackingId` plus `position`/`pageNum` (and `?trk=` on the company
+ *   link), so the same target yields a different URL on every run — which
+ *   breaks any consumer deduping or upserting on this field. `position`/
+ *   `pageNum` also just restate `index`.
  * - **Rejecting hostname-less URLs.** `new URL('javascript:void(0)')` parses
  *   without throwing and reports an empty hostname, so a try/catch alone would
- *   let junk through. Nothing without a hostname is a job URL.
+ *   let junk through. Nothing without a hostname is a usable URL.
  */
-export function normalizeJobUrl(href: string | null | undefined, baseUrl: string): string | null {
+function normalizeLinkedInUrl(href: string | null | undefined, baseUrl: string): string | null {
   if (!href) return null;
   let url: URL;
   try {
@@ -113,6 +114,22 @@ export function normalizeJobUrl(href: string | null | undefined, baseUrl: string
   url.search = '';
   url.hash = '';
   return url.toString();
+}
+
+/** Stable, absolute URL of an individual job posting. See `normalizeLinkedInUrl`. */
+export function normalizeJobUrl(href: string | null | undefined, baseUrl: string): string | null {
+  return normalizeLinkedInUrl(href, baseUrl);
+}
+
+/**
+ * Stable, absolute URL of a company's LinkedIn page, e.g.
+ * `https://de.linkedin.com/company/yatta-solutions-gmbh`. Same normalization
+ * as `normalizeJobUrl` — the company link carries its own `?trk=` tracking
+ * param, and this URL is what the run's address cache is keyed on, so it has
+ * to be identical across every card of the same company.
+ */
+export function normalizeCompanyUrl(href: string | null | undefined, baseUrl: string): string | null {
+  return normalizeLinkedInUrl(href, baseUrl);
 }
 
 /**

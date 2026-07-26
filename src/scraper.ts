@@ -9,16 +9,19 @@
 
 import { chromium } from 'playwright';
 import type { Page, Locator } from 'playwright';
-import { buildSearchUrl, normalizeJobUrl, hostnameOf, jobIdFromUrl } from './url';
+import { buildSearchUrl, normalizeJobUrl, normalizeCompanyUrl, hostnameOf, jobIdFromUrl } from './url';
 import {
   JOB_LIST_SELECTOR,
   SEE_MORE_BUTTON_SELECTOR,
   VIEWED_ALL_JOBS_SELECTOR,
   LIST_COMPANY_SELECTOR,
+  LIST_COMPANY_LINK_SELECTOR,
   COMPANY_SELECTOR,
   DESCRIPTION_SELECTOR,
   JOB_LINK_SELECTOR,
 } from './selectors';
+import { createCompanyLookup } from './companyLookup';
+import type { CompanyLookup } from './companyLookup';
 import type {
   CompanyMismatchCheck,
   JobResult,
@@ -330,6 +333,7 @@ export interface ScrapeJobOptions {
   seenSourceJobIds: Map<string, number>;
   runTimestamp: number;
   clickRetryAttempts?: number;
+  companyLookup: CompanyLookup;
 }
 
 interface JobIdentity {
@@ -337,12 +341,13 @@ interface JobIdentity {
   listCompany: string | null;
   sourceJobId: string | null;
   sourceUrl: string | null;
+  companyUrl: string | null;
 }
 
 // `baseUrl` is the search page's own URL, used to resolve relative job hrefs.
 async function readJobIdentity(jobItem: Locator, baseUrl: string): Promise<JobIdentity> {
-  // These four reads have no data dependency on each other, so they run
-  // concurrently rather than costing four sequential round-trips per job.
+  // These five reads have no data dependency on each other, so they run
+  // concurrently rather than costing five sequential round-trips per job.
   //
   // Every one is bounded *and* individually recoverable. Both matter: all of
   // these selectors are scraped from moving markup (see file header), an
@@ -350,7 +355,7 @@ async function readJobIdentity(jobItem: Locator, baseUrl: string): Promise<JobId
   // renamed class into half an hour of dead wait across a long run, and an
   // unguarded rejection would throw away the rest of the identity — including
   // the sourceUrl that is supposed to survive a later failure.
-  const [title, listCompany, entityUrn, href] = await Promise.all([
+  const [title, listCompany, entityUrn, href, companyHref] = await Promise.all([
     // Falls back to the index-derived title downstream if it can't be read.
     jobItem
       .locator('h3')
@@ -377,6 +382,14 @@ async function readJobIdentity(jobItem: Locator, baseUrl: string): Promise<JobId
       .first()
       .getAttribute('href', { timeout: 1000 })
       .catch(() => null),
+    // The company subtitle nests a link to the company's LinkedIn page, which
+    // is where its office addresses live. Read here rather than from the
+    // detail pane so it's available even if the click or the pane read fails.
+    jobItem
+      .locator(LIST_COMPANY_LINK_SELECTOR)
+      .first()
+      .getAttribute('href', { timeout: 1000 })
+      .catch(() => null),
   ]);
 
   const sourceUrl = normalizeJobUrl(href, baseUrl);
@@ -386,7 +399,7 @@ async function readJobIdentity(jobItem: Locator, baseUrl: string): Promise<JobId
   // losing the ID silently degrades both.
   const sourceJobId = entityUrn?.match(/jobPosting:(\d+)$/)?.[1] ?? jobIdFromUrl(sourceUrl);
 
-  return { title, listCompany, sourceJobId, sourceUrl };
+  return { title, listCompany, sourceJobId, sourceUrl, companyUrl: normalizeCompanyUrl(companyHref, baseUrl) };
 }
 
 // The sign-in nag can also block the click on the job card itself (not just
@@ -468,6 +481,7 @@ export async function scrapeJob(
   let sourceJobId: string | null = null;
   let sourceUrl: string | null = null;
   let sourceHostname: string | null = null;
+  let companyUrl: string | null = null;
   // Hoisted so the catch return keeps the marker when a duplicate's scrape
   // fails partway through.
   let duplicateOfIdx: number | null = null;
@@ -494,6 +508,8 @@ export async function scrapeJob(
         sourceHostname: null,
         scrapedAt: new Date().toISOString(),
         duplicateOfIdx: null,
+        companyUrl: null,
+        companyAddresses: null,
       };
     }
 
@@ -502,6 +518,7 @@ export async function scrapeJob(
     sourceJobId = identity.sourceJobId;
     sourceUrl = identity.sourceUrl;
     sourceHostname = hostnameOf(sourceUrl);
+    companyUrl = identity.companyUrl;
 
     // Duplicates (repeated pages from LinkedIn's list-loading pagination) are
     // scraped in full like any other job — they're only marked, so the
@@ -519,6 +536,16 @@ export async function scrapeJob(
 
     const lateOverlayDetected = await checkForLateOverlay(page);
 
+    // Deliberately after checkForLateOverlay: that check has to stay tight
+    // against the company/description reads it validates, and this lookup can
+    // take seconds. Run in between, it would make lateOverlayDetected describe
+    // a moment well after the data it's supposed to vouch for.
+    //
+    // The lookup drives its own page on its own context, so it can't disturb
+    // this page or its detail pane, and it never rejects — a company page
+    // that's blocked or missing yields null instead of failing the job.
+    const companyAddresses = await options.companyLookup.addressesFor(companyUrl);
+
     return {
       index,
       title: title || fallbackTitle,
@@ -533,6 +560,8 @@ export async function scrapeJob(
       sourceHostname,
       scrapedAt: new Date().toISOString(),
       duplicateOfIdx,
+      companyUrl,
+      companyAddresses,
     };
   } catch (error) {
     return {
@@ -549,6 +578,8 @@ export async function scrapeJob(
       sourceHostname,
       scrapedAt: new Date().toISOString(),
       duplicateOfIdx,
+      companyUrl,
+      companyAddresses: null,
     };
   }
 }
@@ -561,6 +592,7 @@ export interface ScrapeContext {
   runTimestamp: number;
   delayBetweenJobsMs?: number;
   clickRetryAttempts?: number;
+  companyLookup: CompanyLookup;
 }
 
 async function scrapeJobAndRecord(
@@ -575,6 +607,7 @@ async function scrapeJobAndRecord(
     seenSourceJobIds: ctx.seenSourceJobIds,
     runTimestamp: ctx.runTimestamp,
     clickRetryAttempts: ctx.clickRetryAttempts,
+    companyLookup: ctx.companyLookup,
   });
   results[index] = result; // indexed write (not push) so a retry replaces, not appends
   ctx.onProgress?.(isStaleResult(result) ? { type: 'job:stale', result } : { type: 'job:done', result });
@@ -613,6 +646,9 @@ export const runScrape: RunScraper = async ({ onProgress, searchParams, scraperO
   const browser = await chromium.launch({ headless: scraperOptions?.headless ?? false });
   const context = await browser.newContext({ viewport: scraperOptions?.viewport ?? { width: 1440, height: 900 } });
   const page = await context.newPage();
+  // Its own context, not this one — the lookup clears cookies before every
+  // company page it opens, which would throw away the guest search session.
+  const companyLookup = await createCompanyLookup(browser, scraperOptions?.companyLookup);
 
   try {
     await page.goto(searchUrl, { waitUntil: 'domcontentloaded' });
@@ -635,6 +671,7 @@ export const runScrape: RunScraper = async ({ onProgress, searchParams, scraperO
       runTimestamp,
       delayBetweenJobsMs: scraperOptions?.delayBetweenJobsMs,
       clickRetryAttempts: scraperOptions?.clickRetryAttempts,
+      companyLookup,
     };
 
     const staleIndices = await scrapeAllJobsOnce(ctx, results);
@@ -642,6 +679,7 @@ export const runScrape: RunScraper = async ({ onProgress, searchParams, scraperO
 
     return { results, url: searchUrl };
   } finally {
+    await companyLookup.close().catch(() => { });
     await browser.close();
   }
 };

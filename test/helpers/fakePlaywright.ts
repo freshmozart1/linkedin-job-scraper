@@ -1,8 +1,8 @@
-// Minimal hand-written fakes for the Playwright Page/Locator surface that
-// src/scraper.ts actually calls. Plain objects satisfying only the methods
-// used, cast to the real type at the call site — no mocking library, no
-// real browser.
-import type { Page, Locator } from 'playwright';
+// Minimal hand-written fakes for the Playwright Browser/Page/Locator surface
+// that src/scraper.ts and src/companyLookup.ts actually call. Plain objects
+// satisfying only the methods used, cast to the real type at the call site —
+// no mocking library, no real browser.
+import type { Browser, BrowserContext, Page, Locator } from 'playwright';
 
 export interface FakeLocatorConfig {
   isVisible?: () => boolean | Promise<boolean>;
@@ -73,6 +73,10 @@ export interface FakePageConfig {
    * makes it a stable base for resolving relative job hrefs.
    */
   url?: () => string;
+  /** Company-page navigation. Receives the URL so tests can count and assert on loads. */
+  goto?: (url: string, options?: { waitUntil?: string; timeout?: number }) => void | Promise<void>;
+  /** The context this page belongs to; companyLookup calls clearCookies() on it before every goto. */
+  context?: () => BrowserContext;
 }
 
 export function createFakePage(config: FakePageConfig = {}): Page {
@@ -83,6 +87,42 @@ export function createFakePage(config: FakePageConfig = {}): Page {
     waitForLoadState: async () => {
       if (config.waitForLoadState) await config.waitForLoadState();
     },
+    goto: async (url: string, options?: { waitUntil?: string; timeout?: number }) => {
+      if (config.goto) await config.goto(url, options);
+      return null;
+    },
+    context: () => config.context?.() ?? createFakeContext(),
   };
   return page as unknown as Page;
+}
+
+export interface FakeContextConfig {
+  /** Called before each company-page navigation; the lookup depends on this to keep LinkedIn serving the Locations section. */
+  clearCookies?: () => void | Promise<void>;
+  newPage?: () => Page;
+  close?: () => void | Promise<void>;
+}
+
+export function createFakeContext(config: FakeContextConfig = {}): BrowserContext {
+  const context = {
+    clearCookies: async () => {
+      if (config.clearCookies) await config.clearCookies();
+    },
+    newPage: async () => config.newPage?.() ?? createFakePage(),
+    close: async () => {
+      if (config.close) await config.close();
+    },
+  };
+  return context as unknown as BrowserContext;
+}
+
+export interface FakeBrowserConfig {
+  newContext?: () => BrowserContext;
+}
+
+export function createFakeBrowser(config: FakeBrowserConfig = {}): Browser {
+  const browser = {
+    newContext: async () => config.newContext?.() ?? createFakeContext(),
+  };
+  return browser as unknown as Browser;
 }
