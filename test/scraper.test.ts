@@ -18,9 +18,13 @@ import {
   VIEWED_ALL_JOBS_SELECTOR,
   JOB_LIST_SELECTOR,
   LIST_COMPANY_SELECTOR,
+  LIST_COMPANY_LINK_SELECTOR,
   COMPANY_SELECTOR,
   DESCRIPTION_SELECTOR,
   JOB_LINK_SELECTOR,
+  normalizeCompanyUrl,
+  type CompanyAddress,
+  type CompanyLookup,
   type JobResult,
   type ScrapeProgressEvent,
 } from '../src/index';
@@ -164,6 +168,8 @@ function makeResult(partial: Partial<JobResult> & { index: number }): JobResult 
     sourceHostname: null,
     scrapedAt: '2024-01-01T00:00:00.000Z',
     duplicateOfIdx: null,
+    companyUrl: null,
+    companyAddresses: null,
     ...partial,
   };
 }
@@ -391,6 +397,8 @@ function makeJobLocator(opts: {
   entityUrnUnreadable?: boolean;
   /** Collects every getAttribute call, so tests can assert reads are bounded. */
   attributeReads?: AttributeRead[];
+  /** The href on the card's company link, which the address lookup is keyed on. */
+  companyUrl?: string | null;
 }): Locator {
   const hasTitle = opts.hasTitle ?? true;
   return createFakeLocator({
@@ -432,9 +440,36 @@ function makeJobLocator(opts: {
           },
         });
       }
+      if (selector === LIST_COMPANY_LINK_SELECTOR) {
+        return createFakeLocator({
+          getAttribute: (name, options) => {
+            opts.attributeReads?.push({ name, options });
+            return opts.companyUrl ?? null;
+          },
+        });
+      }
       return createFakeLocator();
     },
   });
+}
+
+/**
+ * A CompanyLookup that never touches a browser. `addresses` decides what every
+ * lookup resolves to; `requested` records the URLs it was asked for, so tests
+ * can assert on caching and on which card link the scraper actually read.
+ */
+function stubCompanyLookup(
+  addresses: CompanyAddress[] | null = null
+): CompanyLookup & { requested: (string | null)[] } {
+  const requested: (string | null)[] = [];
+  return {
+    requested,
+    async addressesFor(companyUrl) {
+      requested.push(companyUrl);
+      return companyUrl ? addresses : null;
+    },
+    async close() {},
+  };
 }
 
 /** Locators shared by every scrapeJob() test: no overlay ever appears, and the detail-pane title link is always found. */
@@ -467,7 +502,7 @@ test('scrapeJob returns a success result with the scraped title, company, and de
     defaultLocator: createFakeLocator({ waitFor: () => {}, isVisible: () => false }),
   });
 
-  const result = await scrapeJob(page, 0, 1, { seenSourceJobIds: new Map(), runTimestamp: 123 });
+  const result = await scrapeJob(page, 0, 1, { seenSourceJobIds: new Map(), runTimestamp: 123, companyLookup: stubCompanyLookup() });
 
   assert.equal(result.status, 'success');
   assert.equal(result.title, 'Frontend Developer');
@@ -488,7 +523,7 @@ test('scrapeJob skips a list item with no job title instead of scraping it as a 
     locatorsBySelector: { [JOB_LIST_SELECTOR]: createFakeLocator({ nth: () => jobItem }) },
   });
 
-  const result = await scrapeJob(page, 7, 10, { seenSourceJobIds: new Map(), runTimestamp: 123 });
+  const result = await scrapeJob(page, 7, 10, { seenSourceJobIds: new Map(), runTimestamp: 123, companyLookup: stubCompanyLookup() });
 
   assert.equal(result.status, 'skipped');
   assert.match(result.error ?? '', /not a real job card/i);
@@ -510,7 +545,7 @@ test('scrapeJob marks a repeated posting ID as a duplicate of its first occurren
   });
   const seenSourceJobIds = new Map<string, number>([['111', 0]]);
 
-  const result = await scrapeJob(page, 3, 10, { seenSourceJobIds, runTimestamp: 123 });
+  const result = await scrapeJob(page, 3, 10, { seenSourceJobIds, runTimestamp: 123, companyLookup: stubCompanyLookup() });
 
   assert.equal(result.status, 'success');
   assert.equal(result.duplicateOfIdx, 0);
@@ -526,7 +561,7 @@ test('scrapeJob returns a failed result when an unexpected error is thrown', asy
     locatorsBySelector: { [JOB_LIST_SELECTOR]: createFakeLocator({ nth: () => jobItem }) },
   });
 
-  const result = await scrapeJob(page, 2, 10, { seenSourceJobIds: new Map(), runTimestamp: 123 });
+  const result = await scrapeJob(page, 2, 10, { seenSourceJobIds: new Map(), runTimestamp: 123, companyLookup: stubCompanyLookup() });
 
   assert.equal(result.status, 'failed');
   assert.match(result.error ?? '', /element detached from DOM/);
@@ -553,7 +588,7 @@ test('scrapeJob fails after the click but still keeps the sourceJobId/sourceUrl 
     },
   });
 
-  const result = await scrapeJob(page, 0, 1, { seenSourceJobIds: new Map(), runTimestamp: 123, clickRetryAttempts: 1 });
+  const result = await scrapeJob(page, 0, 1, { seenSourceJobIds: new Map(), runTimestamp: 123, clickRetryAttempts: 1, companyLookup: stubCompanyLookup() });
 
   assert.equal(result.status, 'failed');
   assert.equal(result.sourceJobId, '111');
@@ -562,7 +597,7 @@ test('scrapeJob fails after the click but still keeps the sourceJobId/sourceUrl 
 });
 
 /** Runs scrapeJob against one job card on an otherwise clean page (no overlay, detail pane resolves). */
-async function scrapeSingleJob(jobItem: Locator, pageUrl?: string): Promise<JobResult> {
+async function scrapeSingleJob(jobItem: Locator, pageUrl?: string, companyLookup?: CompanyLookup): Promise<JobResult> {
   const page = createFakePage({
     url: pageUrl ? () => pageUrl : undefined,
     locatorsBySelector: {
@@ -571,7 +606,11 @@ async function scrapeSingleJob(jobItem: Locator, pageUrl?: string): Promise<JobR
     },
     defaultLocator: createFakeLocator({ waitFor: () => {}, isVisible: () => false }),
   });
-  return scrapeJob(page, 0, 1, { seenSourceJobIds: new Map(), runTimestamp: 123 });
+  return scrapeJob(page, 0, 1, {
+    seenSourceJobIds: new Map(),
+    runTimestamp: 123,
+    companyLookup: companyLookup ?? stubCompanyLookup(),
+  });
 }
 
 test('scrapeJob resolves a relative job href against the search page URL', async () => {
@@ -668,13 +707,144 @@ test('scrapeJob bounds every card attribute read with an explicit timeout', asyn
 
   await scrapeSingleJob(jobItem);
 
-  assert.ok(attributeReads.length >= 2, 'expected both the urn and href reads to be recorded');
+  assert.ok(attributeReads.length >= 3, 'expected the urn, job href and company href reads to be recorded');
   for (const read of attributeReads) {
     assert.ok(
       typeof read.options?.timeout === 'number' && read.options.timeout <= 1000,
       `getAttribute(${read.name}) was given no bounded timeout: ${JSON.stringify(read.options)}`
     );
   }
+});
+
+const FRANKFURT: CompanyAddress = {
+  streetAddress: 'Bockenheimer Anlage 46',
+  city: 'Frankfurt',
+  postalCode: 'Hesse 60322',
+  countryCode: 'DE',
+};
+
+test('normalizeCompanyUrl strips the trk tracking param LinkedIn puts on the card company link', () => {
+  assert.equal(
+    normalizeCompanyUrl(
+      'https://de.linkedin.com/company/yatta-solutions-gmbh?trk=public_jobs_jserp-result_job-search-card-subtitle',
+      SEARCH_PAGE_URL
+    ),
+    'https://de.linkedin.com/company/yatta-solutions-gmbh'
+  );
+});
+
+test('normalizeCompanyUrl resolves a relative company href against the search page URL', () => {
+  assert.equal(
+    normalizeCompanyUrl('/company/yatta-solutions-gmbh', SEARCH_PAGE_URL),
+    'https://de.linkedin.com/company/yatta-solutions-gmbh'
+  );
+});
+
+test('normalizeCompanyUrl returns null for a missing or hostname-less href', () => {
+  assert.equal(normalizeCompanyUrl(null, SEARCH_PAGE_URL), null);
+  assert.equal(normalizeCompanyUrl('javascript:void(0)', SEARCH_PAGE_URL), null);
+});
+
+test('scrapeJob reads the company link off the card and normalizes it into companyUrl', async () => {
+  const jobItem = makeJobLocator({
+    title: 'Frontend Developer',
+    listCompany: 'Yatta',
+    sourceJobId: '111',
+    companyUrl: 'https://de.linkedin.com/company/yatta-solutions-gmbh?trk=public_jobs_jserp-result',
+  });
+
+  const result = await scrapeSingleJob(jobItem);
+
+  assert.equal(result.companyUrl, 'https://de.linkedin.com/company/yatta-solutions-gmbh');
+});
+
+test('scrapeJob looks the company addresses up by companyUrl and attaches them to the result', async () => {
+  const jobItem = makeJobLocator({
+    title: 'Frontend Developer',
+    listCompany: 'Yatta',
+    sourceJobId: '111',
+    companyUrl: 'https://de.linkedin.com/company/yatta-solutions-gmbh',
+  });
+  const lookup = stubCompanyLookup([FRANKFURT]);
+
+  const result = await scrapeSingleJob(jobItem, undefined, lookup);
+
+  assert.deepEqual(lookup.requested, ['https://de.linkedin.com/company/yatta-solutions-gmbh']);
+  assert.deepEqual(result.companyAddresses, [FRANKFURT]);
+});
+
+test('scrapeJob keeps status success with null companyAddresses when the lookup could not read the page', async () => {
+  // A blocked or broken company page must never turn a perfectly good job
+  // scrape into a failure.
+  const jobItem = makeJobLocator({
+    title: 'Frontend Developer',
+    listCompany: 'Yatta',
+    sourceJobId: '111',
+    companyUrl: 'https://de.linkedin.com/company/yatta-solutions-gmbh',
+  });
+
+  const result = await scrapeSingleJob(jobItem, undefined, stubCompanyLookup(null));
+
+  assert.equal(result.status, 'success');
+  assert.equal(result.descriptionText, 'A description.');
+  assert.equal(result.companyAddresses, null);
+});
+
+test('scrapeJob nulls companyUrl and companyAddresses when the card carries no company link', async () => {
+  const jobItem = makeJobLocator({
+    title: 'Frontend Developer',
+    listCompany: 'Acme',
+    sourceJobId: '111',
+    companyUrl: null,
+  });
+
+  const result = await scrapeSingleJob(jobItem, undefined, stubCompanyLookup([FRANKFURT]));
+
+  assert.equal(result.status, 'success');
+  assert.equal(result.companyUrl, null);
+  assert.equal(result.companyAddresses, null);
+});
+
+test('scrapeJob keeps the companyUrl captured during identity read on a result that later fails', async () => {
+  const jobItem = makeJobLocator({
+    title: 'Frontend Developer',
+    listCompany: 'Yatta',
+    sourceJobId: '111',
+    companyUrl: 'https://de.linkedin.com/company/yatta-solutions-gmbh',
+    onClick: () => {
+      throw new Error('click intercepted by another overlay');
+    },
+  });
+  const page = createFakePage({
+    locatorsBySelector: {
+      [JOB_LIST_SELECTOR]: createFakeLocator({ nth: () => jobItem }),
+      [OVERLAY_SELECTOR]: createFakeLocator({ isVisible: () => false }),
+    },
+  });
+
+  const result = await scrapeJob(page, 0, 1, {
+    seenSourceJobIds: new Map(),
+    runTimestamp: 123,
+    clickRetryAttempts: 1,
+    companyLookup: stubCompanyLookup([FRANKFURT]),
+  });
+
+  assert.equal(result.status, 'failed');
+  assert.equal(result.companyUrl, 'https://de.linkedin.com/company/yatta-solutions-gmbh');
+  assert.equal(result.companyAddresses, null);
+});
+
+test('scrapeJob resolves a relative company href against the search page URL', async () => {
+  const jobItem = makeJobLocator({
+    title: 'Frontend Developer',
+    listCompany: 'Yatta',
+    sourceJobId: '111',
+    companyUrl: '/company/yatta-solutions-gmbh',
+  });
+
+  const result = await scrapeSingleJob(jobItem, 'https://de.linkedin.com/jobs/search?keywords=frontend');
+
+  assert.equal(result.companyUrl, 'https://de.linkedin.com/company/yatta-solutions-gmbh');
 });
 
 test('scrapeAllJobsOnce collects the indices of jobs whose detail-pane company mismatches the list', async () => {
@@ -705,7 +875,7 @@ test('scrapeAllJobsOnce collects the indices of jobs whose detail-pane company m
   });
 
   const staleIndices = await scrapeAllJobsOnce(
-    { page, totalJobs: 2, seenSourceJobIds: new Map(), runTimestamp: 123, delayBetweenJobsMs: 0 },
+    { page, totalJobs: 2, seenSourceJobIds: new Map(), runTimestamp: 123, delayBetweenJobsMs: 0, companyLookup: stubCompanyLookup() },
     []
   );
 
@@ -741,7 +911,7 @@ test('scrapeAllJobsOnce emits job:done for a clean result and job:stale for a st
   const progressEvents: ScrapeProgressEvent[] = [];
 
   await scrapeAllJobsOnce(
-    { page, totalJobs: 2, seenSourceJobIds: new Map(), runTimestamp: 123, delayBetweenJobsMs: 0, onProgress: (e) => progressEvents.push(e) },
+    { page, totalJobs: 2, seenSourceJobIds: new Map(), runTimestamp: 123, delayBetweenJobsMs: 0, companyLookup: stubCompanyLookup(), onProgress: (e) => progressEvents.push(e) },
     []
   );
 
@@ -776,6 +946,7 @@ test('a job that comes back clean on a later scrapeAllJobsOnce pass emits job:do
     seenSourceJobIds: new Map<string, number>(),
     runTimestamp: 123,
     delayBetweenJobsMs: 0,
+    companyLookup: stubCompanyLookup(),
     onProgress: (e: ScrapeProgressEvent) => firstPassEvents.push(e),
   };
 
@@ -816,6 +987,7 @@ test('a job that is still stale on a later scrapeAllJobsOnce pass emits job:stal
     seenSourceJobIds: new Map<string, number>(),
     runTimestamp: 123,
     delayBetweenJobsMs: 0,
+    companyLookup: stubCompanyLookup(),
   };
   const results: JobResult[] = [];
 

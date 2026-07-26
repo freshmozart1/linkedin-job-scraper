@@ -1,6 +1,6 @@
 # linkedin-job-scraper
 
-Playwright-driven scraper for LinkedIn's public/guest job search results (no login required). Loads all jobs on a search via infinite scroll and "See more jobs" pagination, then scrapes title/company/description for every job card, with duplicate/stale-retry detection built in.
+Playwright-driven scraper for LinkedIn's public/guest job search results (no login required). Loads all jobs on a search via infinite scroll and "See more jobs" pagination, then scrapes title/company/description for every job card, follows each card's company link to collect that company's office addresses, and detects duplicates and stale results along the way.
 
 Every search parameter is caller-supplied — there are no fixed defaults for location, date posted, experience level, job type, etc. Every engine timing/retry constant is likewise overridable.
 
@@ -39,6 +39,19 @@ Only `keywords` is required. Everything else (`location`, `geoId`, `datePosted`,
 
 Every engine tuning constant (browser `headless`/`viewport`, scroll/click retry limits, inter-job delay, overlay-clear timing) is optional and defaults to this package's own historically-working values — nothing is hardcoded inside the engine.
 
+`companyLookup` groups the settings for the company-address pass:
+
+```ts
+scraperOptions: {
+  companyLookup: {
+    navigationTimeoutMs: 20000,    // per company page load
+    emptyRetries: 1,               // extra attempts when an attempt yields no addresses: no Locations section, an authwall bounce, or a navigation error
+    delayBetweenLookupsMs: 900,    // pause after a lookup that hit the network; cache hits skip it
+    maxAddressesPerCompany: 10,    // default: uncapped — some companies publish 100+
+  },
+}
+```
+
 ## Return value: `ScrapeOutcome`
 
 `runScrape` resolves once every job has been scraped and the browser it launched has been closed. It never resolves partially — if the run throws, nothing is returned, so wrap the call if you want to keep partial data (collect it from `onProgress` instead).
@@ -67,6 +80,15 @@ interface JobResult {
   sourceHostname: string | null;    // sourceUrl's hostname, e.g. de.linkedin.com (varies per job)
   scrapedAt: string;                // ISO-8601 timestamp, new Date().toISOString()
   duplicateOfIdx: number | null;    // index of the first job with this posting ID, else null
+  companyUrl: string | null;        // absolute URL of the company's LinkedIn page, normalized
+  companyAddresses: CompanyAddress[] | null;  // primary address first; see below
+}
+
+interface CompanyAddress {
+  streetAddress: string | null;     // street line(s) as printed, joined with ', '
+  city: string | null;
+  postalCode: string | null;        // region + postal together, e.g. 'Hessen 60313' or 'WA 98104'
+  countryCode: string | null;       // ISO-3166 alpha-2, uppercased
 }
 ```
 
@@ -77,6 +99,25 @@ Field notes worth knowing before you consume this:
 - **`companyMismatch` / `lateOverlayDetected`** — the two staleness signals. Pass the result to the exported `isStaleResult(result)` rather than testing them by hand; it folds both into one predicate and is the same check the engine used to decide whether to retry. A result still flagged after the run means the retry didn't clear it — treat its `company`/`descriptionText` as possibly belonging to the previously-viewed job.
 - **`sourceUrl` / `sourceHostname` / `scrapedAt`** — `sourceUrl` is the absolute URL of the individual job posting (each job has its own; it is not the search URL). It's scraped directly from the job list item's own link before the card is even clicked — LinkedIn's guest search re-renders the detail pane client-side on click, so `page.url()` never changes and can't be used for this — and then normalized: resolved against the search page URL and stripped of LinkedIn's per-session `refId`/`trackingId`/`position` query string, so the same posting produces the same URL on every run and is safe to dedupe or upsert on. Because it's captured before the click, it survives a later click/detail-pane failure. It is `null` whenever no usable URL could be read: `'skipped'` results, a `'failed'` result whose error preceded the identity read, a card with no link, or an href with no hostname — so **a `'success'` result can still carry a `null` `sourceUrl`**; don't assume otherwise. `sourceHostname` is `sourceUrl`'s hostname (`null` exactly when `sourceUrl` is); LinkedIn serves individual postings from country-specific subdomains, so it can differ across jobs in the same run. `scrapedAt` is always set, on every status.
 - **`duplicateOfIdx`** — LinkedIn's guest pagination can re-serve an earlier page verbatim. Repeats are scraped in full and only marked: `null` on first (and only) occurrences, otherwise the index of the first job with the same `sourceJobId`. Filter on `duplicateOfIdx === null` if you want each posting once. It stays `null` whenever `sourceJobId` is `null`, since identity can't be established.
+- **`companyUrl`** — the hiring company's LinkedIn page, read from the card's company link and normalized the same way `sourceUrl` is (resolved against the search URL, `?trk=` tracking stripped). Like `sourceUrl` it's captured before the click, so it survives a later failure. It's also the key the run's address cache uses — deliberately not the company's display name, which LinkedIn abbreviates in the list ("Slalom" for `slalom-consulting`) in ways that collide between unrelated companies.
+- **`companyAddresses`** — office addresses from that company page, **with the address LinkedIn tags "Primary" at index 0**. `null` and `[]` mean different things: `[]` means the page was read and the company publishes no address, while `null` means no lookup happened or it failed (no `companyUrl`, a blocked page, a navigation error). **Expect roughly 70% of companies to return addresses** — the rest genuinely publish none on their guest page. That is normal, not a bug. A run where *nothing* comes back is a different signal; see the note on cookies below.
+
+### `companyAddresses` shape
+
+LinkedIn prints an address as up to two optional street lines plus one locality line of the form `<city>, <region> <postal>, <CC>`. Region and postal code are joined with a plain space and no separator that distinguishes them, so they stay joined in `postalCode` rather than being guessed apart:
+
+```ts
+// "Bockenheimer Anlage 46" / "Frankfurt, Hesse 60322, DE"
+{ streetAddress: 'Bockenheimer Anlage 46', city: 'Frankfurt', postalCode: 'Hesse 60322', countryCode: 'DE' }
+
+// "2 Kingdom Street" / "First Floor" / "London, England W2 6BD, GB"
+{ streetAddress: '2 Kingdom Street, First Floor', city: 'London', postalCode: 'England W2 6BD', countryCode: 'GB' }
+
+// "Wien, AT" — no street, no postal code
+{ streetAddress: null, city: 'Wien', postalCode: null, countryCode: 'AT' }
+```
+
+Every field is nullable because LinkedIn omits parts freely. The one known parse limitation: a city containing commas puts its own overflow into `postalCode`, since nothing in the markup says where the city ends (1 occurrence in a 461-address sample).
 
 ## Progress events
 
@@ -121,18 +162,38 @@ onProgress: (event) => {
 The pure functions behind `sourceUrl`/`sourceHostname`/`sourceJobId` are exported too, so you can re-derive them from a stored URL instead of trusting a persisted field:
 
 ```ts
-import { normalizeJobUrl, hostnameOf, jobIdFromUrl } from 'linkedin-job-scraper';
+import { normalizeJobUrl, normalizeCompanyUrl, hostnameOf, jobIdFromUrl } from 'linkedin-job-scraper';
 
 normalizeJobUrl('/jobs/view/x-4012345678?refId=abc', 'https://de.linkedin.com/jobs/search');
 // 'https://de.linkedin.com/jobs/view/x-4012345678'   — resolved, tracking params stripped
+normalizeCompanyUrl('/company/yatta-solutions-gmbh?trk=public_jobs', 'https://de.linkedin.com/jobs/search');
+// 'https://de.linkedin.com/company/yatta-solutions-gmbh'
 hostnameOf('https://de.linkedin.com/jobs/view/x-4012345678');  // 'de.linkedin.com'
 jobIdFromUrl('https://de.linkedin.com/jobs/view/x-4012345678'); // '4012345678'
 ```
 
-All three return `null` rather than throwing on input that isn't a usable job URL.
+All of them return `null` rather than throwing on input that isn't a usable LinkedIn URL.
+
+## Address helpers
+
+The address parser is pure and exported, so a stored company page can be re-parsed without re-scraping:
+
+```ts
+import { parseLocalityLine, parseCompanyLocation, toCompanyAddresses } from 'linkedin-job-scraper';
+
+parseLocalityLine('Frankfurt am Main, Hessen 60313, DE');
+// { city: 'Frankfurt am Main', postalCode: 'Hessen 60313', countryCode: 'DE' }
+
+toCompanyAddresses([{ isPrimary: false, lines: ['Berlin, DE'] }, { isPrimary: true, lines: ['Dortmund, DE'] }]);
+// [{ ...Dortmund }, { ...Berlin }]   — the primary is moved to index 0
+```
+
+`createCompanyLookup(browser, options)` is exported too, if you want to resolve addresses for a list of company URLs without running a job search.
 
 ## Notes
 
 - Guest/unauthenticated view only — no login, no credentials.
 - LinkedIn's markup and anti-bot gating can change or vary by session; this scrapes an unofficial, moving surface.
-- `runScrape` launches and closes its own Chromium browser per call.
+- `runScrape` launches and closes its own Chromium browser per call, and opens **two** contexts inside it: one for the search, one for company pages. The company context clears its cookies before every navigation — LinkedIn only serves the "Locations" section to a cookie jar that hasn't already seen a company page, so without this the second company onwards silently comes back with no addresses. If a whole run returns empty `companyAddresses`, suspect that mechanism rather than assuming LinkedIn dropped the data.
+- Company pages must be genuinely navigated to; LinkedIn answers `fetch()` for them with HTTP 999.
+- Expect the run to take noticeably longer than a job-only scrape: one extra page load per distinct company (a 60-job search typically covers ~54).

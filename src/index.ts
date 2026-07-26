@@ -1,6 +1,9 @@
 export * from './types';
 export * from './selectors';
-export { buildSearchUrl, normalizeJobUrl, hostnameOf, jobIdFromUrl } from './url';
+export { buildSearchUrl, normalizeJobUrl, normalizeCompanyUrl, hostnameOf, jobIdFromUrl } from './url';
+export { parseLocalityLine, parseCompanyLocation, toCompanyAddresses } from './address';
+export { createCompanyLookup } from './companyLookup';
+export type { CompanyLookup, CompanyLookupOptions } from './companyLookup';
 export {
   runScrape,
   scrapeJob,
