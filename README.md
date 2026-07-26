@@ -82,6 +82,9 @@ interface JobResult {
   duplicateOfIdx: number | null;    // index of the first job with this posting ID, else null
   companyUrl: string | null;        // absolute URL of the company's LinkedIn page, normalized
   companyAddresses: CompanyAddress[] | null;  // primary address first; see below
+  location: string | null;          // list card's location text, scraped verbatim
+  postedAt: string | null;          // list card's posting date (datetime attribute, e.g. '2026-07-21')
+  tags: string[] | null;            // detail pane's job-criteria values (seniority, employment type, job function, industries)
 }
 
 interface CompanyAddress {
@@ -101,6 +104,9 @@ Field notes worth knowing before you consume this:
 - **`duplicateOfIdx`** — LinkedIn's guest pagination can re-serve an earlier page verbatim. Repeats are scraped in full and only marked: `null` on first (and only) occurrences, otherwise the index of the first job with the same `sourceJobId`. Filter on `duplicateOfIdx === null` if you want each posting once. It stays `null` whenever `sourceJobId` is `null`, since identity can't be established.
 - **`companyUrl`** — the hiring company's LinkedIn page, read from the card's company link and normalized the same way `sourceUrl` is (resolved against the search URL, `?trk=` tracking stripped). Like `sourceUrl` it's captured before the click, so it survives a later failure. It's also the key the run's address cache uses — deliberately not the company's display name, which LinkedIn abbreviates in the list ("Slalom" for `slalom-consulting`) in ways that collide between unrelated companies.
 - **`companyAddresses`** — office addresses from that company page, **with the address LinkedIn tags "Primary" at index 0**. `null` and `[]` mean different things: `[]` means the page was read and the company publishes no address, while `null` means no lookup happened or it failed (no `companyUrl`, a blocked page, a navigation error). **Expect roughly 70% of companies to return addresses** — the rest genuinely publish none on their guest page. That is normal, not a bug. A run where *nothing* comes back is a different signal; see the note on cookies below.
+- **`location`** — the list card's location span, scraped verbatim with no parsing. Read at the same point as `sourceUrl`/`companyUrl`, so it survives a later click/detail-pane failure. `null` when the card carries no usable location span.
+- **`postedAt`** — the list card's posting date, taken from the `datetime` attribute (e.g. `'2026-07-21'`) rather than the relative display text ("5 days ago"), which goes stale the moment it's stored. Read and captured the same way as `location`.
+- **`tags`** — the *values* (not the labels) from the detail pane's job-criteria list: seniority level, employment type, job function, industries, in whatever order LinkedIn renders them. `null` and `[]` mean different things, the same way they do for `companyAddresses`: `[]` means the detail pane was read and the job genuinely lists no criteria, `null` means the read never happened or failed.
 
 ### `companyAddresses` shape
 

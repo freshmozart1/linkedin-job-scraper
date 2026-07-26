@@ -2,6 +2,21 @@
 
 All notable changes to this project are documented in this file.
 
+## v0.4.0
+
+> `JobResult` gains three required properties: `location`, `postedAt` and `tags`.
+
+### Added
+
+- `JobResult.location` — the list card's location text (`span.job-search-card__location`), scraped verbatim with no parsing. Read at the same point as `sourceUrl`/`companyUrl`, so it survives a later click/detail-pane failure. `null` when the card carries no usable location span.
+- `JobResult.postedAt` — the list card's posting date, read from `time.job-search-card__listdate`'s `datetime` attribute (e.g. `'2026-07-21'`) rather than the relative display text ("5 days ago"), which goes stale the moment it's stored.
+- `JobResult.tags` — the *values* (not labels) from the detail pane's job-criteria list (`ul.description__job-criteria-list`), i.e. seniority level, employment type, job function and industries, as `string[]`. `[]` and `null` are distinct, the same way they are for `companyAddresses`: `[]` means the detail pane was read and the job genuinely lists no criteria, `null` means the read never happened or failed.
+- `LIST_LOCATION_SELECTOR`, `LIST_POSTED_AT_SELECTOR` and `JOB_CRITERIA_VALUE_SELECTOR` exported from `src/selectors.ts`.
+
+### Changed
+
+- The internal `readCompanyAndDescription` is renamed `readDetailPane` and now reads `company`/`descriptionText`/`tags` concurrently via `Promise.all` instead of two sequential awaits, since a third independent value is now read alongside them.
+
 ## v0.3.0
 
 > `JobResult` gains two required properties, so any code constructing or
