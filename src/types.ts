@@ -95,6 +95,32 @@ export interface JobResult {
    * navigation error). Roughly 30% of companies legitimately publish none.
    */
   companyAddresses: CompanyAddress[] | null;
+  /**
+   * The list card's location text (`span.job-search-card__location`), scraped
+   * verbatim with no parsing. Read at the same point as `sourceUrl`, so it
+   * survives a later click/detail-pane failure. Null when the card carries no
+   * usable location span.
+   */
+  location: string | null;
+  /**
+   * The list card's posting date, read from `time.job-search-card__listdate`'s
+   * `datetime` attribute (e.g. `'2026-07-21'`) rather than the relative
+   * display text ("5 days ago"), which goes stale as soon as it's stored.
+   * Read at the same point as `sourceUrl`, so it survives a later
+   * click/detail-pane failure. Null when the card carries no usable element.
+   */
+  postedAt: string | null;
+  /**
+   * The values (not labels) from the detail pane's job-criteria list —
+   * seniority level, employment type, job function, industries, in whatever
+   * order LinkedIn renders them — as plain strings.
+   *
+   * `[]` and `null` are distinct, the same way they are for
+   * `companyAddresses`: `[]` means the detail pane was read and the job
+   * genuinely lists no criteria, whereas `null` means the read never
+   * happened or failed.
+   */
+  tags: string[] | null;
 }
 
 export interface JobsLoadingEvent {

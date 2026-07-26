@@ -20,6 +20,8 @@ export interface FakeLocatorConfig {
   count?: () => number | Promise<number>;
   waitFor?: () => void | Promise<void>;
   scrollIntoViewIfNeeded?: () => void | Promise<void>;
+  /** Backs Locator.allInnerTexts() — the only "read every match" API this codebase uses (for tags). */
+  allInnerTexts?: () => string[] | Promise<string[]>;
   /** Override for .nth(index), e.g. to return a distinct locator per job index. Defaults to returning this same locator. */
   nth?: (index: number) => Locator;
   /** Override for .locator(selector), e.g. to return a distinct locator per chained selector. Defaults to returning this same locator. */
@@ -51,6 +53,7 @@ export function createFakeLocator(config: FakeLocatorConfig = {}): Locator {
     scrollIntoViewIfNeeded: async () => {
       if (config.scrollIntoViewIfNeeded) await config.scrollIntoViewIfNeeded();
     },
+    allInnerTexts: async () => (config.allInnerTexts ? config.allInnerTexts() : []),
   };
   return locator as unknown as Locator;
 }

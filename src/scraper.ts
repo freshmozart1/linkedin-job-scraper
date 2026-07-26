@@ -16,9 +16,12 @@ import {
   VIEWED_ALL_JOBS_SELECTOR,
   LIST_COMPANY_SELECTOR,
   LIST_COMPANY_LINK_SELECTOR,
+  LIST_LOCATION_SELECTOR,
+  LIST_POSTED_AT_SELECTOR,
   COMPANY_SELECTOR,
   DESCRIPTION_SELECTOR,
   JOB_LINK_SELECTOR,
+  JOB_CRITERIA_VALUE_SELECTOR,
 } from './selectors';
 import { createCompanyLookup } from './companyLookup';
 import type { CompanyLookup } from './companyLookup';
@@ -342,12 +345,14 @@ interface JobIdentity {
   sourceJobId: string | null;
   sourceUrl: string | null;
   companyUrl: string | null;
+  location: string | null;
+  postedAt: string | null;
 }
 
 // `baseUrl` is the search page's own URL, used to resolve relative job hrefs.
 async function readJobIdentity(jobItem: Locator, baseUrl: string): Promise<JobIdentity> {
-  // These five reads have no data dependency on each other, so they run
-  // concurrently rather than costing five sequential round-trips per job.
+  // These seven reads have no data dependency on each other, so they run
+  // concurrently rather than costing seven sequential round-trips per job.
   //
   // Every one is bounded *and* individually recoverable. Both matter: all of
   // these selectors are scraped from moving markup (see file header), an
@@ -355,7 +360,7 @@ async function readJobIdentity(jobItem: Locator, baseUrl: string): Promise<JobId
   // renamed class into half an hour of dead wait across a long run, and an
   // unguarded rejection would throw away the rest of the identity — including
   // the sourceUrl that is supposed to survive a later failure.
-  const [title, listCompany, entityUrn, href, companyHref] = await Promise.all([
+  const [title, listCompany, entityUrn, href, companyHref, location, postedAt] = await Promise.all([
     // Falls back to the index-derived title downstream if it can't be read.
     jobItem
       .locator('h3')
@@ -390,6 +395,20 @@ async function readJobIdentity(jobItem: Locator, baseUrl: string): Promise<JobId
       .first()
       .getAttribute('href', { timeout: 1000 })
       .catch(() => null),
+    // Scraped verbatim, no parsing — exactly one location span per card.
+    jobItem
+      .locator(LIST_LOCATION_SELECTOR)
+      .first()
+      .innerText({ timeout: 1000 })
+      .then((t) => t.trim())
+      .catch(() => null),
+    // The datetime attribute (e.g. '2026-07-21'), not the relative display
+    // text ("5 days ago"), which goes stale the moment it's stored.
+    jobItem
+      .locator(LIST_POSTED_AT_SELECTOR)
+      .first()
+      .getAttribute('datetime', { timeout: 1000 })
+      .catch(() => null),
   ]);
 
   const sourceUrl = normalizeJobUrl(href, baseUrl);
@@ -399,7 +418,15 @@ async function readJobIdentity(jobItem: Locator, baseUrl: string): Promise<JobId
   // losing the ID silently degrades both.
   const sourceJobId = entityUrn?.match(/jobPosting:(\d+)$/)?.[1] ?? jobIdFromUrl(sourceUrl);
 
-  return { title, listCompany, sourceJobId, sourceUrl, companyUrl: normalizeCompanyUrl(companyHref, baseUrl) };
+  return {
+    title,
+    listCompany,
+    sourceJobId,
+    sourceUrl,
+    companyUrl: normalizeCompanyUrl(companyHref, baseUrl),
+    location,
+    postedAt,
+  };
 }
 
 // The sign-in nag can also block the click on the job card itself (not just
@@ -437,20 +464,35 @@ async function waitForJobDetailToLoad(page: Page, sourceJobId: string | null): P
     .catch(() => { });
 }
 
-async function readCompanyAndDescription(page: Page): Promise<{ company: string | null; descriptionText: string | null }> {
-  const company = await page
-    .locator(COMPANY_SELECTOR)
-    .first()
-    .innerText({ timeout: 1000 })
-    .then((t) => t.trim())
-    .catch(() => null);
-  const descriptionText = await page
-    .locator(DESCRIPTION_SELECTOR)
-    .first()
-    .innerText({ timeout: 1000 })
-    .then((t) => t.trim())
-    .catch(() => null);
-  return { company, descriptionText };
+async function readDetailPane(
+  page: Page
+): Promise<{ company: string | null; descriptionText: string | null; tags: string[] | null }> {
+  // No data dependency between these three, so read them concurrently rather
+  // than as three sequential round-trips.
+  const [company, descriptionText, tags] = await Promise.all([
+    page
+      .locator(COMPANY_SELECTOR)
+      .first()
+      .innerText({ timeout: 1000 })
+      .then((t) => t.trim())
+      .catch(() => null),
+    page
+      .locator(DESCRIPTION_SELECTOR)
+      .first()
+      .innerText({ timeout: 1000 })
+      .then((t) => t.trim())
+      .catch(() => null),
+    // Values only, not labels. allInnerTexts() takes no timeout and doesn't
+    // auto-wait, so there's no dead-wait risk to guard against here; the
+    // catch distinguishes a genuine exception (null) from a clean zero-match
+    // resolution ([], the job genuinely lists no criteria).
+    page
+      .locator(JOB_CRITERIA_VALUE_SELECTOR)
+      .allInnerTexts()
+      .then((texts) => texts.map((t) => t.trim()).filter(Boolean))
+      .catch(() => null),
+  ]);
+  return { company, descriptionText, tags };
 }
 
 // The "sign in to view more jobs" nag can render asynchronously at any point
@@ -482,6 +524,8 @@ export async function scrapeJob(
   let sourceUrl: string | null = null;
   let sourceHostname: string | null = null;
   let companyUrl: string | null = null;
+  let location: string | null = null;
+  let postedAt: string | null = null;
   // Hoisted so the catch return keeps the marker when a duplicate's scrape
   // fails partway through.
   let duplicateOfIdx: number | null = null;
@@ -510,6 +554,9 @@ export async function scrapeJob(
         duplicateOfIdx: null,
         companyUrl: null,
         companyAddresses: null,
+        location: null,
+        postedAt: null,
+        tags: null,
       };
     }
 
@@ -519,6 +566,8 @@ export async function scrapeJob(
     sourceUrl = identity.sourceUrl;
     sourceHostname = hostnameOf(sourceUrl);
     companyUrl = identity.companyUrl;
+    location = identity.location;
+    postedAt = identity.postedAt;
 
     // Duplicates (repeated pages from LinkedIn's list-loading pagination) are
     // scraped in full like any other job — they're only marked, so the
@@ -531,7 +580,7 @@ export async function scrapeJob(
     await dismissOverlayAfterClick(page);
     await waitForJobDetailToLoad(page, sourceJobId);
 
-    const { company, descriptionText } = await readCompanyAndDescription(page);
+    const { company, descriptionText, tags } = await readDetailPane(page);
     const companyMismatch = isCompanyMismatch({ listCompany: identity.listCompany, detailCompany: company });
 
     const lateOverlayDetected = await checkForLateOverlay(page);
@@ -562,6 +611,9 @@ export async function scrapeJob(
       duplicateOfIdx,
       companyUrl,
       companyAddresses,
+      location,
+      postedAt,
+      tags,
     };
   } catch (error) {
     return {
@@ -580,6 +632,9 @@ export async function scrapeJob(
       duplicateOfIdx,
       companyUrl,
       companyAddresses: null,
+      location,
+      postedAt,
+      tags: null,
     };
   }
 }
