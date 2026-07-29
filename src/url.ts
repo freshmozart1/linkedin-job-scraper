@@ -154,14 +154,6 @@ function normalizeLinkedInUrl(
     return url.toString();
 }
 
-/** Stable, absolute URL of an individual job posting. See `normalizeLinkedInUrl`. */
-export function normalizeJobUrl(
-    href: string | null | undefined,
-    baseUrl: string,
-): string | null {
-    return normalizeLinkedInUrl(href, baseUrl);
-}
-
 /**
  * Stable, absolute URL of a company's LinkedIn page, e.g.
  * `https://de.linkedin.com/company/yatta-solutions-gmbh`. Same normalization
@@ -174,31 +166,4 @@ export function normalizeCompanyUrl(
     baseUrl: string,
 ): string | null {
     return normalizeLinkedInUrl(href, baseUrl);
-}
-
-/**
- * Hostname of a job URL, e.g. `de.linkedin.com` — LinkedIn serves individual
- * postings from country-specific subdomains, so this varies job to job within
- * one run. Null for anything that isn't a URL with a hostname.
- */
-export function hostnameOf(url: string | null | undefined): string | null {
-    if (!url) return null;
-    try {
-        // `.hostname` is '' (not an error) for schemes like `javascript:` and
-        // `mailto:`, so the `|| null` is doing real work here.
-        return new URL(url).hostname || null;
-    } catch {
-        return null;
-    }
-}
-
-/**
- * LinkedIn's numeric posting ID, recovered from the trailing `-<id>` segment
- * of a job URL. This is a second, independent carrier of the same ID that
- * `data-entity-urn` holds — worth having, because losing the ID silently
- * disables both duplicate detection and the detail-pane wait.
- */
-export function jobIdFromUrl(url: string | null | undefined): string | null {
-    if (!url) return null;
-    return url.match(/-(\d+)\/?$/)?.[1] ?? null;
 }
