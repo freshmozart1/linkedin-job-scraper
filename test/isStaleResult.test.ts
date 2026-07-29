@@ -28,14 +28,26 @@ describe('isStaleResult()', () => {
         assert,
     }) => {
         assert.equal(
-            isStaleResult(
-                makeResult({
-                    index: 0,
-                    status: 'failed',
-                    companyMismatch: true,
-                    lateOverlayDetected: true,
-                }),
-            ),
+            isStaleResult({
+                index: 0,
+                status: 'failed',
+                error: 'boom',
+                title: null,
+                company: null,
+                descriptionText: null,
+                companyMismatch: true,
+                lateOverlayDetected: true,
+                sourceJobId: null,
+                sourceUrl: null,
+                sourceHostname: null,
+                scrapedAt: '2024-01-01T00:00:00.000Z',
+                duplicateOfIdx: null,
+                companyUrl: null,
+                companyAddresses: null,
+                location: null,
+                postedAt: null,
+                tags: null,
+            }),
             false,
         );
     });

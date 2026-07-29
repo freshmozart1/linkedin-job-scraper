@@ -5,6 +5,7 @@ import { createFakeLocator, createFakePage } from './helpers/fakePlaywright';
 import { createFakeJobLocator } from './helpers/fakePlaywright/createFakeJobLocator';
 import { baseScrapeJobLocators } from './helpers/baseScrapeJobLocators';
 import { stubCompanyLookup } from './helpers/stubCompanyLookup';
+import { assertFailed } from './helpers/assertFailed';
 
 describe('scrapeAllJobsOnce()', () => {
     it('collects the indices of jobs whose detail-pane company mismatches the list', async ({
@@ -263,5 +264,78 @@ describe('scrapeAllJobsOnce()', () => {
                 .map((e) => e.type),
             ['job:stale'],
         );
+    });
+
+    it('does not abort the run when one job fails partway through — later jobs still get scraped', async ({
+        assert,
+    }) => {
+        const jobLocators = [
+            createFakeJobLocator({
+                title: 'Frontend Developer',
+                listCompany: 'Acme',
+                sourceJobId: '111',
+                sourceUrl:
+                    'https://www.linkedin.com/jobs/view/frontend-developer-at-acme-111',
+                companyUrl: 'https://de.linkedin.com/company/acme',
+                location: 'Hamburg',
+                postedAt: '2026-07-21',
+            }),
+            createFakeJobLocator({
+                title: 'Backend Developer',
+                listCompany: 'Acme',
+                sourceJobId: '222',
+                sourceUrl:
+                    'https://www.linkedin.com/jobs/view/backend-developer-at-acme-222',
+                companyUrl: 'https://de.linkedin.com/company/acme',
+                location: 'Hamburg',
+                postedAt: '2026-07-21',
+                onClick: () => {
+                    throw new Error('click intercepted by another overlay');
+                },
+            }),
+            createFakeJobLocator({
+                title: 'Fullstack Developer',
+                listCompany: 'Acme',
+                sourceJobId: '333',
+                sourceUrl:
+                    'https://www.linkedin.com/jobs/view/fullstack-developer-at-acme-333',
+                companyUrl: 'https://de.linkedin.com/company/acme',
+                location: 'Hamburg',
+                postedAt: '2026-07-21',
+            }),
+        ];
+        const page = createFakePage({
+            locatorsBySelector: {
+                [JOB_LIST_SELECTOR]: createFakeLocator({
+                    nth: (index) => jobLocators[index]!,
+                }),
+                ...baseScrapeJobLocators(() => 'Acme'),
+            },
+            defaultLocator: createFakeLocator({
+                waitFor: () => {},
+                isVisible: () => false,
+            }),
+        });
+        const results: JobResult[] = [];
+
+        await scrapeAllJobsOnce(
+            {
+                page,
+                totalJobs: 3,
+                seenSourceJobIds: new Map(),
+                runTimestamp: 123,
+                delayBetweenJobsMs: 0,
+                clickRetryAttempts: 1,
+                companyLookup: stubCompanyLookup(),
+            },
+            results,
+        );
+
+        assert.equal(results.length, 3);
+        assert.equal(results[0]?.status, 'success');
+        const middle = results[1]!;
+        assertFailed(middle);
+        assert.match(middle.error, /click intercepted by another overlay/);
+        assert.equal(results[2]?.status, 'success');
     });
 });

@@ -1,14 +1,13 @@
-import type { JobResult } from '../../src/types';
+import type { SuccessfulJobResult } from '../../src/types';
 
 export function makeResult(
-    partial: Partial<JobResult> & { index: number },
-): JobResult {
+    partial: Partial<SuccessfulJobResult> & { index: number },
+): SuccessfulJobResult {
     return {
         title: '',
         company: '',
         descriptionText: '',
         status: 'success',
-        error: null,
         companyMismatch: false,
         lateOverlayDetected: false,
         sourceJobId: '',

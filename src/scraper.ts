@@ -9,7 +9,7 @@
 
 import { chromium } from 'playwright';
 import type { Page, Locator } from 'playwright';
-import { buildSearchUrl } from './url';
+import { buildSearchUrl, jobIdFromUrl } from './url';
 import {
     JOB_LIST_SELECTOR,
     SEE_MORE_BUTTON_SELECTOR,
@@ -445,148 +445,185 @@ export async function scrapeJob(
     options: ScrapeJobOptions,
 ): Promise<JobResult> {
     const jobItem = jobItemsLocator(page).nth(index);
-    let sourceJobId: string;
-    let sourceUrl: string;
-    let sourceHostname: string;
-    let companyUrl: string;
-    let location: string;
-    let postedAt: string;
+    // Hoisted so the catch below can return whatever identity was captured
+    // before a later failure, instead of losing it along with the rest of
+    // the job.
+    let title: string | null = null;
+    let sourceJobId: string | null = null;
+    let sourceUrl: string | null = null;
+    let sourceHostname: string | null = null;
+    let companyUrl: string | null = null;
+    let location: string | null = null;
+    let postedAt: string | null = null;
     // Hoisted so the catch return keeps the marker when a duplicate's scrape
     // fails partway through.
     let duplicateOfIdx: number | null = null;
-    await jobItem.scrollIntoViewIfNeeded();
-    // Belt-and-suspenders: jobItemsLocator() already excludes `<li>`s without
-    // an `<h3>`, but if LinkedIn's markup shifts and a non-job item slips
-    // through anyway, don't click it and fabricate a "success" record for
-    // it — bail out before touching the page at all.
-    const firstH3 = jobItem.locator('h3').first();
-    const noTitleError = new Error(
-        'No job title found for this list item - LinkedIn markup has likely changed',
-    );
-    if ((await firstH3.count()) === 0) throw noTitleError;
-    const trim = async <T = string | string[] | null>(
-        locator: string,
-        { attr, page: p }: { attr?: string; page?: Page } = {},
-    ) => {
-        const isJobCriteria = locator === JOB_CRITERIA_VALUE_SELECTOR;
-        const el = (isJobCriteria && p ? p : (p ?? jobItem))
-            .locator(locator)
-            .first();
-        try {
-            if (isJobCriteria && p)
-                return (await el
-                    .waitFor({ state: 'attached', timeout: 1000 })
-                    .catch(() => {})
-                    .then(() =>
-                        p.locator(JOB_CRITERIA_VALUE_SELECTOR).allInnerTexts(),
-                    )
-                    .then((texts) =>
-                        texts.map((t) => t.trim()).filter(Boolean),
-                    )) as T;
-            const val = attr
-                ? await el.getAttribute(attr, { timeout: 1000 })
-                : await el.innerText({ timeout: 1000 });
-            return (val?.trim() || '') as unknown as T;
-        } catch {
-            return (isJobCriteria ? null : '') as unknown as T;
-        }
-    };
-    const title = await trim<string>('h3');
-    if (!title) throw noTitleError;
-    const jobHref = await trim(JOB_LINK_SELECTOR, { attr: 'href' });
-    if (!jobHref) throw new Error('No job href found for this list item');
-    const jobUrl = new URL(jobHref, page.url());
-    if (!jobUrl.hostname)
-        throw new Error('No job URL hostname found for this list item');
-    sourceHostname = jobUrl.hostname;
-    jobUrl.search = ''; // normalize to a canonical URL without query params
-    jobUrl.hash = ''; // normalize to a canonical URL without fragment
-    sourceUrl = jobUrl.toString();
-    const entityUrn = await trim<string>('.base-card', {
-        attr: 'data-entity-urn',
-    });
-    sourceJobId =
-        entityUrn.match(/jobPosting:(\d+)$/)?.[1] ??
-        sourceUrl.match(/-(\d+)\/?$/)?.[1] ??
-        '';
-    if (!sourceJobId)
-        throw new Error(
-            'No source job ID found for job item - LinkedIn markup has likely changed',
+    try {
+        await jobItem.scrollIntoViewIfNeeded();
+        // Belt-and-suspenders: jobItemsLocator() already excludes `<li>`s
+        // without an `<h3>`, but if LinkedIn's markup shifts and a non-job
+        // item slips through anyway, don't click it and fabricate a
+        // "success" record for it — bail out before touching the page at
+        // all.
+        const firstH3 = jobItem.locator('h3').first();
+        const noTitleError = new Error(
+            'No job title found for this list item - LinkedIn markup has likely changed',
         );
-    const companyHref = await trim(LIST_COMPANY_LINK_SELECTOR, {
-        attr: 'href',
-    });
-    if (!companyHref) throw new Error('No company href found for list item');
-    const _companyUrl = new URL(companyHref, page.url());
-    if (!_companyUrl.hostname)
-        throw new Error('No company URL hostname found for list item');
-    _companyUrl.search = '';
-    _companyUrl.hash = '';
-    companyUrl = _companyUrl.toString();
-    location = await trim(LIST_LOCATION_SELECTOR);
-    if (!location) throw new Error('No location found for list item');
-    postedAt = await trim(LIST_POSTED_AT_SELECTOR, { attr: 'datetime' });
-    if (!postedAt) throw new Error('No posted date found for list item');
-    // Duplicates (repeated pages from LinkedIn's list-loading pagination) are
-    // scraped in full like any other job — they're only marked, so the
-    // caller can hide or show them.
-    duplicateOfIdx = registerJobOccurrence(
-        options.seenSourceJobIds,
-        sourceJobId,
-        index,
-    );
+        if ((await firstH3.count()) === 0) throw noTitleError;
+        const trim = async <T = string | string[] | null>(
+            locator: string,
+            { attr, page: p }: { attr?: string; page?: Page } = {},
+        ) => {
+            const isJobCriteria = locator === JOB_CRITERIA_VALUE_SELECTOR;
+            const el = (isJobCriteria && p ? p : (p ?? jobItem))
+                .locator(locator)
+                .first();
+            try {
+                if (isJobCriteria && p)
+                    return (await el
+                        .waitFor({ state: 'attached', timeout: 1000 })
+                        .catch(() => {})
+                        .then(() =>
+                            p
+                                .locator(JOB_CRITERIA_VALUE_SELECTOR)
+                                .allInnerTexts(),
+                        )
+                        .then((texts) =>
+                            texts.map((t) => t.trim()).filter(Boolean),
+                        )) as T;
+                const val = attr
+                    ? await el.getAttribute(attr, { timeout: 1000 })
+                    : await el.innerText({ timeout: 1000 });
+                return (val?.trim() || '') as unknown as T;
+            } catch {
+                return (isJobCriteria ? null : '') as unknown as T;
+            }
+        };
+        title = await trim<string>('h3');
+        if (!title) throw noTitleError;
+        const jobHref = await trim(JOB_LINK_SELECTOR, { attr: 'href' });
+        if (!jobHref) throw new Error('No job href found for this list item');
+        const jobUrl = new URL(jobHref, page.url());
+        if (!jobUrl.hostname)
+            throw new Error('No job URL hostname found for this list item');
+        sourceHostname = jobUrl.hostname;
+        jobUrl.search = ''; // normalize to a canonical URL without query params
+        jobUrl.hash = ''; // normalize to a canonical URL without fragment
+        sourceUrl = jobUrl.toString();
+        const entityUrn = await trim<string>('.base-card', {
+            attr: 'data-entity-urn',
+        });
+        sourceJobId =
+            entityUrn.match(/jobPosting:(\d+)$/)?.[1] ??
+            jobIdFromUrl(sourceUrl) ??
+            '';
+        if (!sourceJobId)
+            throw new Error(
+                'No source job ID found for job item - LinkedIn markup has likely changed',
+            );
+        const companyHref = await trim(LIST_COMPANY_LINK_SELECTOR, {
+            attr: 'href',
+        });
+        if (!companyHref)
+            throw new Error('No company href found for list item');
+        const _companyUrl = new URL(companyHref, page.url());
+        if (!_companyUrl.hostname)
+            throw new Error('No company URL hostname found for list item');
+        _companyUrl.search = '';
+        _companyUrl.hash = '';
+        companyUrl = _companyUrl.toString();
+        location = await trim(LIST_LOCATION_SELECTOR);
+        if (!location) throw new Error('No location found for list item');
+        postedAt = await trim(LIST_POSTED_AT_SELECTOR, { attr: 'datetime' });
+        if (!postedAt) throw new Error('No posted date found for list item');
+        // Duplicates (repeated pages from LinkedIn's list-loading pagination) are
+        // scraped in full like any other job — they're only marked, so the
+        // caller can hide or show them.
+        duplicateOfIdx = registerJobOccurrence(
+            options.seenSourceJobIds,
+            sourceJobId,
+            index,
+        );
 
-    if (options.preClickDelayMs) await sleep(options.preClickDelayMs);
+        if (options.preClickDelayMs) await sleep(options.preClickDelayMs);
 
-    await clickWithOverlayRetries(jobItem, page, options.clickRetryAttempts);
-    await dismissOverlayAfterClick(page);
-    await waitForJobDetailToLoad(page, sourceJobId);
-    const company = await trim<string>(COMPANY_SELECTOR, { page });
-    if (!company) throw new Error('No company in detail pane for job');
-    const descriptionText = await trim<string>(DESCRIPTION_SELECTOR, { page });
-    if (!descriptionText)
-        throw new Error('No description text found for list item');
-    const companyMismatch = isCompanyMismatch({
-        listCompany: await trim(LIST_COMPANY_SELECTOR),
-        detailCompany: company,
-    });
+        await clickWithOverlayRetries(
+            jobItem,
+            page,
+            options.clickRetryAttempts,
+        );
+        await dismissOverlayAfterClick(page);
+        await waitForJobDetailToLoad(page, sourceJobId);
+        const company = await trim<string>(COMPANY_SELECTOR, { page });
+        if (!company) throw new Error('No company in detail pane for job');
+        const descriptionText = await trim<string>(DESCRIPTION_SELECTOR, {
+            page,
+        });
+        if (!descriptionText)
+            throw new Error('No description text found for list item');
+        const companyMismatch = isCompanyMismatch({
+            listCompany: await trim(LIST_COMPANY_SELECTOR),
+            detailCompany: company,
+        });
 
-    const lateOverlayDetected = await checkForLateOverlay(page);
+        const lateOverlayDetected = await checkForLateOverlay(page);
 
-    // Deliberately after checkForLateOverlay: that check has to stay tight
-    // against the company/description reads it validates, and this lookup can
-    // take seconds. Run in between, it would make lateOverlayDetected describe
-    // a moment well after the data it's supposed to vouch for.
-    //
-    // The lookup drives its own page on its own context, so it can't disturb
-    // this page or its detail pane, and it never rejects — a company page
-    // that's blocked or missing yields null instead of failing the job.
-    const companyAddresses =
-        await options.companyLookup.addressesFor(companyUrl);
-    const tags = await trim<string[] | null>(JOB_CRITERIA_VALUE_SELECTOR, {
-        page,
-    });
-    if (tags === null) throw new Error('No job criteria found for job item');
-    return {
-        index,
-        title: title,
-        company,
-        descriptionText,
-        status: 'success',
-        error: null,
-        companyMismatch,
-        lateOverlayDetected,
-        sourceJobId,
-        sourceUrl,
-        sourceHostname,
-        scrapedAt: new Date().toISOString(),
-        duplicateOfIdx,
-        companyUrl,
-        companyAddresses,
-        location,
-        postedAt,
-        tags,
-    };
+        // Deliberately after checkForLateOverlay: that check has to stay tight
+        // against the company/description reads it validates, and this lookup can
+        // take seconds. Run in between, it would make lateOverlayDetected describe
+        // a moment well after the data it's supposed to vouch for.
+        //
+        // The lookup drives its own page on its own context, so it can't disturb
+        // this page or its detail pane, and it never rejects — a company page
+        // that's blocked or missing yields null instead of failing the job.
+        const companyAddresses =
+            await options.companyLookup.addressesFor(companyUrl);
+        const tags = await trim<string[] | null>(JOB_CRITERIA_VALUE_SELECTOR, {
+            page,
+        });
+        if (tags === null)
+            throw new Error('No job criteria found for job item');
+        return {
+            index,
+            title,
+            company,
+            descriptionText,
+            status: 'success',
+            companyMismatch,
+            lateOverlayDetected,
+            sourceJobId,
+            sourceUrl,
+            sourceHostname,
+            scrapedAt: new Date().toISOString(),
+            duplicateOfIdx,
+            companyUrl,
+            companyAddresses,
+            location,
+            postedAt,
+            tags,
+        };
+    } catch (error) {
+        return {
+            index,
+            title,
+            company: null,
+            descriptionText: null,
+            status: 'failed',
+            error: error instanceof Error ? error.message : String(error),
+            companyMismatch: false,
+            lateOverlayDetected: false,
+            sourceJobId,
+            sourceUrl,
+            sourceHostname,
+            scrapedAt: new Date().toISOString(),
+            duplicateOfIdx,
+            companyUrl,
+            companyAddresses: null,
+            location,
+            postedAt,
+            tags: null,
+        };
+    }
 }
 
 export interface ScrapeContext {

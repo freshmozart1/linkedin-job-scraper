@@ -13,6 +13,7 @@ import type { CompanyAddress } from '../src';
 import { baseScrapeJobLocators } from './helpers/baseScrapeJobLocators';
 import { stubCompanyLookup } from './helpers/stubCompanyLookup';
 import { scrapeSingleJob } from './helpers/scrapeSingleJob';
+import { assertFailed } from './helpers/assertFailed';
 import type { AttributeRead } from './helpers/fakePlaywright/interfaces';
 
 describe('scrapeJob()', () => {
@@ -74,7 +75,7 @@ describe('scrapeJob()', () => {
         assert.equal(result.postedAt, '2026-07-21');
         assert.deepEqual(result.tags, ['Full-time']);
     });
-    it('skips a list item with no job title instead of scraping it as a job', async ({
+    it('returns a failed result when the list item has no job title', async ({
         assert,
     }) => {
         const jobItem = createFakeJobLocator({
@@ -89,18 +90,16 @@ describe('scrapeJob()', () => {
             },
         });
 
-        await assert.rejects(
-            async () =>
-                scrapeJob(page, 7, 10, {
-                    seenSourceJobIds: new Map(),
-                    runTimestamp: 123,
-                    companyLookup: stubCompanyLookup(),
-                }),
-            {
-                name: 'Error',
-                message:
-                    'No job title found for this list item - LinkedIn markup has likely changed',
-            },
+        const result = await scrapeJob(page, 7, 10, {
+            seenSourceJobIds: new Map(),
+            runTimestamp: 123,
+            companyLookup: stubCompanyLookup(),
+        });
+
+        assertFailed(result);
+        assert.equal(
+            result.error,
+            'No job title found for this list item - LinkedIn markup has likely changed',
         );
     });
     it('marks a repeated posting ID as a duplicate of its first occurrence', async ({
@@ -151,14 +150,14 @@ describe('scrapeJob()', () => {
             },
         });
 
-        await assert.rejects(
-            scrapeJob(page, 2, 10, {
-                seenSourceJobIds: new Map(),
-                runTimestamp: 123,
-                companyLookup: stubCompanyLookup(),
-            }),
-            /element detached from DOM/,
-        );
+        const result = await scrapeJob(page, 2, 10, {
+            seenSourceJobIds: new Map(),
+            runTimestamp: 123,
+            companyLookup: stubCompanyLookup(),
+        });
+
+        assertFailed(result);
+        assert.match(result.error, /element detached from DOM/);
     });
 
     it('reads the company link off the card and normalizes it into companyUrl', async ({
@@ -232,33 +231,44 @@ describe('scrapeJob()', () => {
         assert.equal(result.sourceHostname, 'de.linkedin.com');
     });
 
-    it('throws for an href with no hostname', async ({ assert }) => {
+    it('returns a failed result for an href with no hostname', async ({
+        assert,
+    }) => {
         const jobItem = createFakeJobLocator({
             title: 'Frontend Developer',
             listCompany: 'Acme',
             sourceJobId: '111',
             sourceUrl: 'javascript:void(0)',
         });
-        await assert.rejects(scrapeSingleJob(jobItem), {
-            name: 'Error',
-            message: 'No job URL hostname found for this list item',
-        });
+
+        const result = await scrapeSingleJob(jobItem);
+
+        assertFailed(result);
+        assert.equal(
+            result.error,
+            'No job URL hostname found for this list item',
+        );
     });
 
-    it('throws when the card has no job link', async ({ assert }) => {
+    it('returns a failed result when the card has no job link', async ({
+        assert,
+    }) => {
         const jobItem = createFakeJobLocator({
             title: 'Frontend Developer',
             listCompany: 'Acme',
             sourceJobId: '111',
             sourceUrl: '',
         });
-        await assert.rejects(scrapeSingleJob(jobItem), {
-            name: 'Error',
-            message: 'No job href found for this list item',
-        });
+
+        const result = await scrapeSingleJob(jobItem);
+
+        assertFailed(result);
+        assert.equal(result.error, 'No job href found for this list item');
     });
 
-    it('throws when the card has no company link', async ({ assert }) => {
+    it('returns a failed result when the card has no company link', async ({
+        assert,
+    }) => {
         const jobItem = createFakeJobLocator({
             title: 'Frontend Developer',
             listCompany: 'Acme',
@@ -266,10 +276,11 @@ describe('scrapeJob()', () => {
             sourceUrl:
                 'https://de.linkedin.com/jobs/view/frontend-developer-at-acme-111',
         });
-        await assert.rejects(scrapeSingleJob(jobItem), {
-            name: 'Error',
-            message: 'No company href found for list item',
-        });
+
+        const result = await scrapeSingleJob(jobItem);
+
+        assertFailed(result);
+        assert.equal(result.error, 'No company href found for list item');
     });
 
     it('resolves a relative company href against the search page URL', async ({
@@ -296,7 +307,9 @@ describe('scrapeJob()', () => {
         );
     });
 
-    it('throws when the list card has no location', async ({ assert }) => {
+    it('returns a failed result when the list card has no location', async ({
+        assert,
+    }) => {
         const jobItem = createFakeJobLocator({
             title: 'Frontend Developer',
             listCompany: 'Acme',
@@ -305,13 +318,14 @@ describe('scrapeJob()', () => {
                 'https://de.linkedin.com/jobs/view/frontend-developer-at-acme-111',
             companyUrl: 'https://de.linkedin.com/company/acme',
         });
-        await assert.rejects(scrapeSingleJob(jobItem), {
-            name: 'Error',
-            message: 'No location found for list item',
-        });
+
+        const result = await scrapeSingleJob(jobItem);
+
+        assertFailed(result);
+        assert.equal(result.error, 'No location found for list item');
     });
 
-    it('throws when the list card has no posted-at date', async ({
+    it('returns a failed result when the list card has no posted-at date', async ({
         assert,
     }) => {
         const jobItem = createFakeJobLocator({
@@ -323,13 +337,14 @@ describe('scrapeJob()', () => {
             companyUrl: 'https://de.linkedin.com/company/acme',
             location: 'Hamburg',
         });
-        await assert.rejects(scrapeSingleJob(jobItem), {
-            name: 'Error',
-            message: 'No posted date found for list item',
-        });
+
+        const result = await scrapeSingleJob(jobItem);
+
+        assertFailed(result);
+        assert.equal(result.error, 'No posted date found for list item');
     });
 
-    it('throws when the posted-at datetime read itself throws', async ({
+    it('returns a failed result when the posted-at datetime read itself throws', async ({
         assert,
     }) => {
         const jobItem = createFakeJobLocator({
@@ -342,10 +357,11 @@ describe('scrapeJob()', () => {
             location: 'Hamburg',
             postedAtUnreadable: true,
         });
-        await assert.rejects(scrapeSingleJob(jobItem), {
-            name: 'Error',
-            message: 'No posted date found for list item',
-        });
+
+        const result = await scrapeSingleJob(jobItem);
+
+        assertFailed(result);
+        assert.equal(result.error, 'No posted date found for list item');
     });
 
     it('falls back to the href for sourceJobId when data-entity-urn is unreadable', async ({
@@ -532,7 +548,9 @@ describe('scrapeJob()', () => {
         assert.deepEqual(result.tags, []);
     });
 
-    it('throws when the job-criteria read itself fails', async ({ assert }) => {
+    it('returns a failed result when the job-criteria read itself fails', async ({
+        assert,
+    }) => {
         const jobItem = createFakeJobLocator({
             title: 'Frontend Developer',
             listCompany: 'Acme',
@@ -560,14 +578,14 @@ describe('scrapeJob()', () => {
             }),
         });
 
-        await assert.rejects(
-            scrapeJob(page, 0, 1, {
-                seenSourceJobIds: new Map(),
-                runTimestamp: 123,
-                companyLookup: stubCompanyLookup(),
-            }),
-            { name: 'Error', message: 'No job criteria found for job item' },
-        );
+        const result = await scrapeJob(page, 0, 1, {
+            seenSourceJobIds: new Map(),
+            runTimestamp: 123,
+            companyLookup: stubCompanyLookup(),
+        });
+
+        assertFailed(result);
+        assert.equal(result.error, 'No job criteria found for job item');
     });
 
     it('waits for the job-criteria list to attach before reading tags', async ({

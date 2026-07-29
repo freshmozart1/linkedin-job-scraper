@@ -1,6 +1,12 @@
 export * from './types';
 export * from './selectors';
-export { buildSearchUrl, normalizeCompanyUrl } from './url';
+export {
+    buildSearchUrl,
+    normalizeJobUrl,
+    normalizeCompanyUrl,
+    hostnameOf,
+    jobIdFromUrl,
+} from './url';
 export {
     parseLocalityLine,
     parseCompanyLocation,

@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented in this file.
 
+## v0.4.6
+
+### Changed
+
+- `JobResult` is now a discriminated union, `SuccessfulJobResult | FailedJobResult`, instead of one flat type. This restores per-job failure isolation: `scrapeJob()` catches its own errors again and returns a `FailedJobResult` (`status: 'failed'`, `error` carrying the thrown message) instead of throwing — fixes a v0.4.5 regression where a single job's failure aborted the entire `runScrape()` run and discarded every already-scraped result. `error` is now exclusive to `FailedJobResult` (not present at all on a successful result). `JobStatus` dropped `'skipped'`, which nothing has produced since v0.4.4.
+- Fixed a v0.4.5 regression that silently deleted `normalizeJobUrl`, `hostnameOf`, and `jobIdFromUrl` from `src/url.ts`'s exports. All three are restored, unchanged in behavior from before v0.4.5.
+
 ## v0.4.5
 
 ### Changed
