@@ -43,6 +43,8 @@ There is no lint script; `typecheck` is the correctness gate. The `test` glob is
 
 `scrollLoadPhase` (LinkedIn's automatic infinite scroll, batches of 10 up to 120 jobs) then `clickLoadPhase` (manual "See more jobs" clicks past that). Both measure progress via `collectJobIds()` — a `Set` of LinkedIn posting IDs — because on a long session LinkedIn's guest pagination can **re-serve an earlier page verbatim**, which raw `<li>` counting cannot distinguish from real growth. Scrolling stops the moment the "See more" button appears rather than waiting for growth to stall, since the button can appear first.
 
+`scrollLoadPhase` scrolls exactly one `<li>` at a time, never a single jump to the bottom — LinkedIn's own lazy-load listener only reacts to genuine incremental scroll progress, and a `scrollTo(0, document.body.scrollHeight)` jump never triggers it, which used to cap every run at the ~60 jobs LinkedIn pre-renders on initial load regardless of how many results actually existed (GitHub issue #10). Before scrolling starts, it hides the page sections LinkedIn renders above the job list so each `<li>`'s own rendered height is the exact pixel distance to the next one — see the Testing section below for how this was verified live and a live-only bug it caught.
+
 ### Overlays can appear at any moment, including mid-click
 
 LinkedIn's guest pages block clicks behind `.modal__overlay--visible` (cookie consent on load, a "sign in to view more jobs" nag later). `clearBlockingOverlays` polls rather than checking once, and only concludes "clear" after several consecutive not-visible reads. `clickWithOverlayRetries` uses short click attempts with an overlay clear between each, because a single long `click()` can get stuck retrying against an overlay that appeared while Playwright was inside its own retry loop.
@@ -102,9 +104,9 @@ Parsing notes worth keeping: the **last `<p>` in a location `<li>` is always the
 
 ## The missing DOM lib is intentional
 
-`tsconfig.json` sets `"lib": ["es2023"]` with **no** `dom`, so this compiles cleanly as a Node library without leaking browser globals into consumers' type space. The cost: code inside `page.evaluate()` (which runs in the browser) has no DOM types, so `collectJobIds` and the `scrollTo` call name the handful of members they use through a structural `globalThis as unknown as {...}` cast. Don't "fix" those casts by adding `"dom"` to `lib`.
+`tsconfig.json` sets `"lib": ["es2023"]` with **no** `dom`, so this compiles cleanly as a Node library without leaking browser globals into consumers' type space. The cost: code inside `page.evaluate()` (which runs in the browser) has no DOM types, so `collectJobIds`, `hidePageSectionsAboveJobList`, and `scrollToListItem` name the handful of members they use through a structural `globalThis as unknown as {...}` cast. Don't "fix" those casts by adding `"dom"` to `lib`.
 
-Related trap: `page.evaluate` serializes its callback with `toString()`, so it **cannot close over module imports**. `JOB_LIST_SELECTOR` is therefore hardcoded literally inside `collectJobIds`, and `COMPANY_LOCATION_ITEM_SELECTOR`/`COMPANY_PRIMARY_TAG_SELECTOR` inside `readRawLocations`, in addition to living in `selectors.ts`. All copies are commented; keep them in sync.
+Related trap: `page.evaluate` serializes its callback with `toString()`, so it **cannot close over module imports**. `JOB_LIST_SELECTOR` is therefore hardcoded literally inside `collectJobIds` and `scrollToListItem`, and `COMPANY_LOCATION_ITEM_SELECTOR`/`COMPANY_PRIMARY_TAG_SELECTOR` inside `readRawLocations`, in addition to living in `selectors.ts`. All copies are commented; keep them in sync.
 
 `tsconfig.test.json` overrides `rootDir` to `"."` because the base config's `rootDir: "src"` (needed for a flat `dist/`) doesn't cover `test/**`. Harmless there since that program is `noEmit`.
 
@@ -112,4 +114,47 @@ Related trap: `page.evaluate` serializes its callback with `toString()`, so it *
 
 `node:test` + `node:assert/strict` — no Jest/Mocha/Vitest, and **no mocking library**. `test/helpers/fakePlaywright.ts` provides `createFakePage`/`createFakeLocator`: plain objects implementing only the `Page`/`Locator` methods the scraper actually calls, cast to the real type via `as unknown as`. Follow that pattern rather than introducing a mocking framework — and extend the fake's config surface when new methods are needed instead of loosening the cast.
 
-No test launches a real browser, so the suite is fast and offline. That also means selector correctness against live LinkedIn markup is **not** covered by tests — changes to `selectors.ts` need manual verification against the real page.
+No test launches a real browser, so the suite is fast and offline. That also means selector correctness against live LinkedIn markup is **not** covered by tests — changes to `selectors.ts` (or to any other code that reasons about real DOM structure or timing, e.g. the scroll phases) need manual verification against the real page.
+
+### Manual verification against live LinkedIn (Chrome DevTools MCP)
+
+For any change whose correctness depends on real LinkedIn markup or browser
+behavior — not just this repo's own control flow — verify it live using the
+Chrome DevTools MCP tools, the same way GitHub issue #10 (scroll phase
+capped at 60 jobs) was diagnosed and fixed:
+
+1. `new_page` with a fresh `isolatedContext` name against a real guest
+   search URL (e.g.
+   `https://www.linkedin.com/jobs/search?keywords=Frontend-Entwicklung&location=Deutschland&geoId=101282230`,
+   consistently 800+ matches). A fresh isolated context avoids the
+   persistent MCP Chrome profile's leftover cookies redirecting to
+   `/authwall` — that redirect is a cookie-jar *inconsistency*, not simply
+   "no cookies" (see the company-addresses section above), and a clean
+   isolated context sidesteps it.
+2. Dismiss the cookie-consent banner and the "sign in to view more jobs"
+   overlay via `evaluate_script` (click the accept button / remove
+   `.modal__overlay--visible`) to reach the same DOM state the real scraper
+   operates in.
+3. `evaluate_script` a snippet that is byte-for-byte the function body under
+   test (not a paraphrase of it) against the live page, and compare against
+   a **negative control**: the previous/old behavior run the same way on a
+   fresh page. For issue #10, this caught something the code itself
+   couldn't reveal any other way: `scrollBy`-driven incremental scrolling
+   grew the unique job count from 56 to 96 before the "See more jobs"
+   button correctly appeared, while the old single `scrollTo` jump grew the
+   raw `<li>` count but left the *unique* count flat — LinkedIn was
+   re-serving earlier jobs verbatim, not loading new ones.
+4. `take_screenshot` before/after for visual confirmation alongside the
+   `evaluate_script` data.
+
+This method also caught a live-only bug this issue's fix would otherwise
+have shipped with: `header.base-serp-page__header.global-alert-offset.sticky-header`
+only gains its `.show` class (and becomes `position: sticky`, pinned at the
+viewport top, ~80px tall) *after* the user has already scrolled past its
+original position — a selector match on `.show` therefore always misses on
+a one-time, pre-scroll hide pass, and the header then permanently eats
+space out of every later scroll step once LinkedIn's own JS adds `.show`
+mid-run. No offline test can catch a DOM state that only exists after a
+real browser has already scrolled a real page. The fix is to hide the
+element unconditionally (drop `.show` from the selector) — a `display:
+none` set before the class is ever added still holds once it is.
