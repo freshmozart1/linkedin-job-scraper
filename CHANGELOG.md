@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented in this file.
 
+## v0.4.8
+
+### Fixed
+
+- `scrollLoadPhase` no longer caps `totalJobs` at ~60 for every run. It previously advanced the page with a single `scrollTo(0, document.body.scrollHeight)` jump per iteration, which LinkedIn's own lazy-load listener never reacts to — only genuine incremental scroll progress triggers it — so the unique job count never grew past the ~60 jobs LinkedIn pre-renders on initial load. It now scrolls one `<li>` at a time, pausing briefly between each, after hiding the page sections LinkedIn renders above the job list so each `<li>`'s own height is the exact scroll distance to the next one. Verified live against real LinkedIn (see `CLAUDE.md`'s Testing section) that this grows the unique count well past 60 before correctly handing off to `clickLoadPhase`.
+
 ## v0.4.7
 
 ### Changed
