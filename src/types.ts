@@ -1,4 +1,4 @@
-export type JobStatus = 'success' | 'skipped' | 'failed';
+export type JobStatus = 'success' | 'failed';
 
 /**
  * One office address published in the "Locations" section of a company's
@@ -29,15 +29,12 @@ export interface RawCompanyLocation {
     lines: string[];
 }
 
-/** One scraped job card, as produced by the scraper (camelCase). */
-export interface JobResult {
+/**
+ * Fields common to every scraped job card, regardless of whether the scrape
+ * succeeded or failed partway through.
+ */
+interface JobResultBase {
     index: number;
-    title: string | null;
-    company: string | null;
-    /** Detail-pane job description text. Subject to the same-company staleness blind spot documented on `companyMismatch`. */
-    descriptionText: string | null;
-    status: JobStatus;
-    error: string | null;
     /**
      * Whether the detail-pane company disagreed with the list-pane company for
      * this job — the primary signal `isStaleResult` uses to catch a detail pane
@@ -45,17 +42,31 @@ export interface JobResult {
      * from an earlier posting at the *same* company: two back-to-back postings
      * from the same employer read as a match here even if the pane never
      * updated, so `descriptionText`/`tags` can silently carry the earlier
-     * job's values in that case.
+     * job's values in that case. Always `false` on a `'failed'` result.
      */
     companyMismatch: boolean;
-    /** Whether a LinkedIn sign-in overlay was detected reappearing late, around when this job's data was read. */
+    /** Whether a LinkedIn sign-in overlay was detected reappearing late, around when this job's data was read. Always `false` on a `'failed'` result. */
     lateOverlayDetected: boolean;
+    /** ISO-8601 timestamp (`new Date().toISOString()`) marking when this job's result was finalized — always set, even for `'failed'` results. */
+    scrapedAt: string;
+    /** Index of the earlier job in this run with the same posting ID; null when not a duplicate. */
+    duplicateOfIdx: number | null;
+}
+
+/** A job card that was fully scraped. */
+export interface SuccessfulJobResult extends JobResultBase {
+    status: 'success';
+    title: string;
+    company: string;
+    /** Detail-pane job description text. Subject to the same-company staleness blind spot documented on `companyMismatch`. */
+    descriptionText: string;
     /**
      * LinkedIn's numeric posting ID, read from the list item's `data-entity-urn`
      * and falling back to the trailing ID in `sourceUrl` when that attribute is
-     * missing; used to detect duplicate/repeated list pages.
+     * missing; used to detect duplicate/repeated list pages. `scrapeJob` throws
+     * if neither source yields an ID.
      */
-    sourceJobId: string | null;
+    sourceJobId: string;
     /**
      * Absolute URL of this individual job posting (not the search page — each
      * job has its own), scraped from the list item's own link before the card is
@@ -64,24 +75,18 @@ export interface JobResult {
      * posting yields the same URL on every run and is safe to dedupe or upsert
      * on.
      *
-     * Null whenever no usable URL could be read: a `'skipped'` result, a
-     * `'failed'` result whose error preceded the identity read, a card with no
-     * link, or an href carrying no hostname (e.g. `javascript:void(0)`). A
-     * `'success'` result can therefore still carry a null `sourceUrl`.
+     * `scrapeJob` throws if the card has no link or the href carries no
+     * hostname (e.g. `javascript:void(0)`), rather than returning a result
+     * with a missing `sourceUrl`.
      */
-    sourceUrl: string | null;
+    sourceUrl: string;
     /**
      * Hostname of `sourceUrl`, e.g. `de.linkedin.com`. LinkedIn serves
      * individual job postings from country-specific subdomains, so this can
-     * differ across jobs within the same run. Null exactly when `sourceUrl` is
-     * null. Re-derivable from a stored `sourceUrl` via the exported
-     * `hostnameOf`.
+     * differ across jobs within the same run. Re-derivable from a stored
+     * `sourceUrl` via the exported `hostnameOf`.
      */
-    sourceHostname: string | null;
-    /** ISO-8601 timestamp (`new Date().toISOString()`) marking when this job's result was finalized — always set, even for `'skipped'`/`'failed'` results. */
-    scrapedAt: string;
-    /** Index of the earlier job in this run with the same posting ID; null when not a duplicate. */
-    duplicateOfIdx: number | null;
+    sourceHostname: string;
     /**
      * Absolute URL of the hiring company's LinkedIn page, scraped from the list
      * item's company link and normalized the same way `sourceUrl` is: resolved
@@ -91,9 +96,10 @@ export interface JobResult {
      * This is also the key the run's address cache is built on, which is why it
      * isn't the company's display name — LinkedIn shows short, ambiguous labels
      * in the list ("Slalom" for `slalom-consulting`) that can collide between
-     * unrelated companies. Null when the card carries no usable company link.
+     * unrelated companies. `scrapeJob` throws if the card carries no usable
+     * company link.
      */
-    companyUrl: string | null;
+    companyUrl: string;
     /**
      * Office addresses published on the company's LinkedIn page, with the
      * address LinkedIn tags "Primary" at index 0.
@@ -108,31 +114,57 @@ export interface JobResult {
     /**
      * The list card's location text (`span.job-search-card__location`), scraped
      * verbatim with no parsing. Read at the same point as `sourceUrl`, so it
-     * survives a later click/detail-pane failure. Null when the card carries no
-     * usable location span.
+     * survives a later click/detail-pane failure. `scrapeJob` throws if the
+     * card carries no usable location span.
      */
-    location: string | null;
+    location: string;
     /**
      * The list card's posting date, read from `time.job-search-card__listdate`'s
      * `datetime` attribute (e.g. `'2026-07-21'`) rather than the relative
      * display text ("5 days ago"), which goes stale as soon as it's stored.
      * Read at the same point as `sourceUrl`, so it survives a later
-     * click/detail-pane failure. Null when the card carries no usable element.
+     * click/detail-pane failure. `scrapeJob` throws if the card carries no
+     * usable element.
      */
-    postedAt: string | null;
+    postedAt: string;
     /**
      * The values (not labels) from the detail pane's job-criteria list —
      * seniority level, employment type, job function, industries, in whatever
      * order LinkedIn renders them — as plain strings.
      *
-     * `[]` and `null` are distinct, the same way they are for
-     * `companyAddresses`: `[]` means the detail pane was read and the job
-     * genuinely lists no criteria, whereas `null` means the read never
-     * happened or failed. Subject to the same-company staleness blind spot
-     * documented on `companyMismatch`.
+     * `[]` means the detail pane was read and the job genuinely lists no
+     * criteria; `scrapeJob` throws if the read itself fails. Subject to the
+     * same-company staleness blind spot documented on `companyMismatch`.
      */
-    tags: string[] | null;
+    tags: string[];
 }
+
+/**
+ * A job card whose scrape threw before finishing. Every field below `error`
+ * holds whatever was captured before the failure — `null` if the failure
+ * happened before that particular read. `company`/`descriptionText`/
+ * `companyAddresses`/`tags` are always `null`: they're only ever read after
+ * every field above them, so a failure can never leave them partially set.
+ */
+export interface FailedJobResult extends JobResultBase {
+    status: 'failed';
+    /** The thrown error's message. */
+    error: string;
+    title: string | null;
+    company: null;
+    descriptionText: null;
+    sourceJobId: string | null;
+    sourceUrl: string | null;
+    sourceHostname: string | null;
+    companyUrl: string | null;
+    companyAddresses: null;
+    location: string | null;
+    postedAt: string | null;
+    tags: null;
+}
+
+/** One scraped job card, as produced by the scraper (camelCase). */
+export type JobResult = SuccessfulJobResult | FailedJobResult;
 
 export interface JobsLoadingEvent {
     type: 'jobs:loading';

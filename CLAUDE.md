@@ -28,7 +28,7 @@ There is no lint script; `typecheck` is the correctness gate. The `test` glob is
 
 ## Architecture
 
-`src/index.ts` is the only public surface — it re-exports the types, the selectors, `buildSearchUrl`, and the scraper functions. Internal helpers in `scraper.ts` are intentionally not exported; the exported subset is what the tests drive directly.
+`src/index.ts` is the only public surface — it re-exports the types, the selectors, `buildSearchUrl`, and the scraper functions. Internal helpers in `scraper/` are intentionally not exported; the exported subset is what the tests drive directly.
 
 - **`src/url.ts`** — All pure URL logic, in two halves. Outbound: `buildSearchUrl(SearchParams)`, holding LinkedIn's guest-search query code tables (`f_TPR` date, `f_E` experience, `f_JT` job type, `f_WT` workplace, `sortBy`) that map friendly union members onto LinkedIn's opaque codes; `extraParams` is the escape hatch for params not explicitly modeled. Inbound: `normalizeJobUrl`/`normalizeCompanyUrl`/`hostnameOf`/`jobIdFromUrl`, which turn a scraped `href` into the `sourceUrl`/`sourceHostname`/`sourceJobId`/`companyUrl` fields. All are exported so consumers can re-derive the derived fields from a stored URL rather than trusting a persisted value. `normalizeJobUrl` and `normalizeCompanyUrl` are two names over one shared `normalizeLinkedInUrl` — the reasoning below applies identically to both, and the company link carries its own `?trk=` tracking param.
 
@@ -37,7 +37,7 @@ There is no lint script; `typecheck` is the correctness gate. The `test` glob is
 - **`src/types.ts`** — All public types. No runtime code.
 - **`src/address.ts`** — Pure parsing of a company page's Locations markup into `CompanyAddress[]`. No Playwright import, so all of it is testable offline; `companyLookup.ts` reads the raw text and hands it here.
 - **`src/companyLookup.ts`** — The browser half of the address lookup: its own context, one page, one cache. See the cookie section below, which is the only reason this file exists separately.
-- **`src/scraper.ts`** — The whole engine (~600 lines). The parts that carry non-obvious reasoning:
+- **`src/scraper/`** — The whole engine, one function per file (e.g. `scrapeJob.ts`, `runScrape.ts`, `clearBlockingOverlays.ts`), with `index.ts` as the folder's own barrel re-exporting exactly the same names `src/index.ts` re-exports from it. Splitting a function out of one of these files still means adding `export` to it and importing it by name from a sibling file — privacy is enforced entirely by what `scraper/index.ts` chooses to re-export, not by what's `export`ed at the file level. The parts that carry non-obvious reasoning:
 
 ### Load phases count unique job IDs, never DOM nodes
 

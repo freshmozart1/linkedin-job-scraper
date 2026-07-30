@@ -3,11 +3,12 @@
 // hand-duplicate these strings.
 //
 // JOB_LIST_SELECTOR is also hardcoded literally inside collectJobIds()'s
-// page.evaluate() in scraper.ts (page.evaluate serializes the callback via
-// toString(), so it can't close over this module's exports) — keep both in
-// sync if this ever changes.
+// page.evaluate() in scraper/collectJobIds.ts (page.evaluate serializes the
+// callback via toString(), so it can't close over this module's exports) —
+// keep both in sync if this ever changes.
 export const JOB_LIST_SELECTOR = 'ul.jobs-search__results-list > li';
-export const SEE_MORE_BUTTON_SELECTOR = 'button.infinite-scroller__show-more-button';
+export const SEE_MORE_BUTTON_SELECTOR =
+    'button.infinite-scroller__show-more-button';
 export const VIEWED_ALL_JOBS_SELECTOR = '.see-more-jobs__viewed-all';
 export const LIST_COMPANY_SELECTOR = 'h4.base-search-card__subtitle';
 export const COMPANY_SELECTOR = '.topcard__org-name-link';
@@ -23,7 +24,8 @@ export const LIST_POSTED_AT_SELECTOR = 'time.job-search-card__listdate';
 
 // Job detail pane ("job criteria" / tags).
 /** Each value span inside the detail pane's job-criteria list (seniority level, employment type, job function, industries). Labels are not scraped, only values. */
-export const JOB_CRITERIA_VALUE_SELECTOR = '.description__job-criteria-text--criteria';
+export const JOB_CRITERIA_VALUE_SELECTOR =
+    '.description__job-criteria-text--criteria';
 
 // Company page ("Locations" section). COMPANY_LOCATION_ITEM_SELECTOR and
 // COMPANY_PRIMARY_TAG_SELECTOR are also hardcoded literally inside

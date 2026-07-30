@@ -63,29 +63,53 @@ interface ScrapeOutcome {
 }
 ```
 
-`results` holds one entry per job card found on the search, ordered by list position — `results[i].index === i`. Nothing is filtered out: duplicates, skipped non-job list items, and failed scrapes all keep their slot, and a stale job that was retried appears once, at its own index, holding the retry's result.
+`results` holds one entry per job card found on the search, ordered by list position — `results[i].index === i`. Nothing is filtered out: duplicates and failed scrapes (including a list item with no `<h3>`, which isn't a real job card) all keep their slot, and a stale job that was retried appears once, at its own index, holding the retry's result.
 
 ```ts
-interface JobResult {
+interface JobResultBase {
   index: number;                    // position in the loaded list
-  title: string | null;
-  company: string | null;           // read from the detail pane
-  descriptionText: string | null;
-  status: 'success' | 'skipped' | 'failed';
-  error: string | null;             // set when status is 'skipped' or 'failed'
   companyMismatch: boolean;         // list-pane company disagreed with detail-pane company
   lateOverlayDetected: boolean;     // a sign-in overlay was visible when this job's data was read
-  sourceJobId: string | null;       // LinkedIn's numeric posting ID
-  sourceUrl: string | null;         // absolute URL of this job posting, normalized (see below)
-  sourceHostname: string | null;    // sourceUrl's hostname, e.g. de.linkedin.com (varies per job)
   scrapedAt: string;                // ISO-8601 timestamp, new Date().toISOString()
   duplicateOfIdx: number | null;    // index of the first job with this posting ID, else null
-  companyUrl: string | null;        // absolute URL of the company's LinkedIn page, normalized
-  companyAddresses: CompanyAddress[] | null;  // primary address first; see below
-  location: string | null;          // list card's location text, scraped verbatim
-  postedAt: string | null;          // list card's posting date (datetime attribute, e.g. '2026-07-21')
-  tags: string[] | null;            // detail pane's job-criteria values (seniority, employment type, job function, industries)
 }
+
+// A job card that was fully scraped.
+interface SuccessfulJobResult extends JobResultBase {
+  status: 'success';
+  title: string;
+  company: string;                  // read from the detail pane
+  descriptionText: string;
+  sourceJobId: string;              // LinkedIn's numeric posting ID
+  sourceUrl: string;                // absolute URL of this job posting, normalized (see below)
+  sourceHostname: string;           // sourceUrl's hostname, e.g. de.linkedin.com (varies per job)
+  companyUrl: string;               // absolute URL of the company's LinkedIn page, normalized
+  companyAddresses: CompanyAddress[] | null;  // primary address first; see below
+  location: string;                 // list card's location text, scraped verbatim
+  postedAt: string;                 // list card's posting date (datetime attribute, e.g. '2026-07-21')
+  tags: string[];                   // detail pane's job-criteria values (seniority, employment type, job function, industries)
+}
+
+// A job card whose scrape threw before finishing. Every field below `error`
+// holds whatever was captured before the failure — null if the failure
+// happened before that particular read.
+interface FailedJobResult extends JobResultBase {
+  status: 'failed';
+  error: string;                    // the thrown error's message
+  title: string | null;
+  company: null;
+  descriptionText: null;
+  sourceJobId: string | null;
+  sourceUrl: string | null;
+  sourceHostname: string | null;
+  companyUrl: string | null;
+  companyAddresses: null;
+  location: string | null;
+  postedAt: string | null;
+  tags: null;
+}
+
+type JobResult = SuccessfulJobResult | FailedJobResult;
 
 interface CompanyAddress {
   streetAddress: string | null;     // street line(s) as printed, joined with ', '
@@ -97,16 +121,16 @@ interface CompanyAddress {
 
 Field notes worth knowing before you consume this:
 
-- **`status`** — `'success'` means the card was clicked and the detail pane was read (that does *not* by itself mean the data is trustworthy; see `companyMismatch`/`lateOverlayDetected` below). `'skipped'` means the list item had no `<h3>` and so wasn't a real job card — it was never clicked, and every other field is null/false except `scrapedAt`, which is always set. `'failed'` means the click or read threw; `error` carries the message, `company`/`descriptionText` are null, and both suspicion flags are forced to `false`.
-- **`title`** — falls back to a synthetic `<runTimestamp>-<paddedIndex>` string (e.g. `1721904000000-007`) when the real title couldn't be read, so it is only `null` for `'skipped'` entries.
-- **`companyMismatch` / `lateOverlayDetected`** — the two staleness signals. Pass the result to the exported `isStaleResult(result)` rather than testing them by hand; it folds both into one predicate and is the same check the engine used to decide whether to retry. A result still flagged after the run means the retry didn't clear it — treat its `company`/`descriptionText` as possibly belonging to the previously-viewed job.
-- **`sourceUrl` / `sourceHostname` / `scrapedAt`** — `sourceUrl` is the absolute URL of the individual job posting (each job has its own; it is not the search URL). It's scraped directly from the job list item's own link before the card is even clicked — LinkedIn's guest search re-renders the detail pane client-side on click, so `page.url()` never changes and can't be used for this — and then normalized: resolved against the search page URL and stripped of LinkedIn's per-session `refId`/`trackingId`/`position` query string, so the same posting produces the same URL on every run and is safe to dedupe or upsert on. Because it's captured before the click, it survives a later click/detail-pane failure. It is `null` whenever no usable URL could be read: `'skipped'` results, a `'failed'` result whose error preceded the identity read, a card with no link, or an href with no hostname — so **a `'success'` result can still carry a `null` `sourceUrl`**; don't assume otherwise. `sourceHostname` is `sourceUrl`'s hostname (`null` exactly when `sourceUrl` is); LinkedIn serves individual postings from country-specific subdomains, so it can differ across jobs in the same run. `scrapedAt` is always set, on every status.
-- **`duplicateOfIdx`** — LinkedIn's guest pagination can re-serve an earlier page verbatim. Repeats are scraped in full and only marked: `null` on first (and only) occurrences, otherwise the index of the first job with the same `sourceJobId`. Filter on `duplicateOfIdx === null` if you want each posting once. It stays `null` whenever `sourceJobId` is `null`, since identity can't be established.
-- **`companyUrl`** — the hiring company's LinkedIn page, read from the card's company link and normalized the same way `sourceUrl` is (resolved against the search URL, `?trk=` tracking stripped). Like `sourceUrl` it's captured before the click, so it survives a later failure. It's also the key the run's address cache uses — deliberately not the company's display name, which LinkedIn abbreviates in the list ("Slalom" for `slalom-consulting`) in ways that collide between unrelated companies.
-- **`companyAddresses`** — office addresses from that company page, **with the address LinkedIn tags "Primary" at index 0**. `null` and `[]` mean different things: `[]` means the page was read and the company publishes no address, while `null` means no lookup happened or it failed (no `companyUrl`, a blocked page, a navigation error). **Expect roughly 70% of companies to return addresses** — the rest genuinely publish none on their guest page. That is normal, not a bug. A run where *nothing* comes back is a different signal; see the note on cookies below.
-- **`location`** — the list card's location span, scraped verbatim with no parsing. Read at the same point as `sourceUrl`/`companyUrl`, so it survives a later click/detail-pane failure. `null` when the card carries no usable location span.
+- **`status`** — `JobResult` is a union of `SuccessfulJobResult` and `FailedJobResult`, and the two have different shapes: narrow on `status` before reading anything else. `'success'` means the card was clicked and the detail pane was read (that does *not* by itself mean the data is trustworthy; see `companyMismatch`/`lateOverlayDetected` below) — every content field is guaranteed present. `'failed'` means `scrapeJob()` threw somewhere along the way; `error` (only present on this variant) carries the thrown message, and every other content field holds whatever was captured before the failure — `null` if the failure happened before that particular field was ever read. `company`/`descriptionText`/`companyAddresses`/`tags` are always `null` on a failed result, since they're only read after everything else.
+- **`title`** — `string` on a successful result (`scrapeJob()` throws if it can't be read); `string | null` on a failed one.
+- **`companyMismatch` / `lateOverlayDetected`** — the two staleness signals, present on both variants (always `false` on a failed result). Pass the result to the exported `isStaleResult(result)` rather than testing them by hand; it folds both into one predicate, only returns `true` for a `'success'` result, and is the same check the engine used to decide whether to retry. A result still flagged after the run means the retry didn't clear it — treat its `company`/`descriptionText` as possibly belonging to the previously-viewed job.
+- **`sourceUrl` / `sourceHostname` / `scrapedAt`** — `sourceUrl` is the absolute URL of the individual job posting (each job has its own; it is not the search URL). It's scraped directly from the job list item's own link before the card is even clicked — LinkedIn's guest search re-renders the detail pane client-side on click, so `page.url()` never changes and can't be used for this — and then normalized: resolved against the search page URL and stripped of LinkedIn's per-session `refId`/`trackingId`/`position` query string, so the same posting produces the same URL on every run and is safe to dedupe or upsert on. Because it's captured before the click, it survives a later click/detail-pane failure — a `'failed'` result still carries it, unless the failure happened before it was read (in which case it's `null`, along with `sourceHostname`). `sourceHostname` is `sourceUrl`'s hostname; LinkedIn serves individual postings from country-specific subdomains, so it can differ across jobs in the same run. `scrapedAt` is always set, on both variants.
+- **`duplicateOfIdx`** — LinkedIn's guest pagination can re-serve an earlier page verbatim. Repeats are scraped in full and only marked: `null` on first (and only) occurrences, otherwise the index of the first job with the same `sourceJobId`. Filter on `duplicateOfIdx === null` if you want each posting once. It stays `null` whenever `sourceJobId` is `null`, since identity can't be established — including on a `'failed'` result whose failure happened before identity was read.
+- **`companyUrl`** — the hiring company's LinkedIn page, read from the card's company link and normalized the same way `sourceUrl` is (resolved against the search URL, `?trk=` tracking stripped). Like `sourceUrl` it's captured before the click, so a `'failed'` result still carries it unless the failure preceded that read. It's also the key the run's address cache uses — deliberately not the company's display name, which LinkedIn abbreviates in the list ("Slalom" for `slalom-consulting`) in ways that collide between unrelated companies.
+- **`companyAddresses`** — office addresses from that company page, **with the address LinkedIn tags "Primary" at index 0**, present only on a `'success'` result (always `null` on `'failed'`). `null` and `[]` mean different things on success: `[]` means the page was read and the company publishes no address, while `null` means no lookup happened or it failed (no `companyUrl`, a blocked page, a navigation error) — unlike everything else on `JobResult`, a failed company-page lookup does **not** fail the job; it's the one field that stays nullable on a successful result on purpose. **Expect roughly 70% of companies to return addresses** — the rest genuinely publish none on their guest page. That is normal, not a bug. A run where *nothing* comes back is a different signal; see the note on cookies below.
+- **`location`** — the list card's location span, scraped verbatim with no parsing. Read at the same point as `sourceUrl`/`companyUrl`, so a `'failed'` result still carries it unless the failure preceded that read.
 - **`postedAt`** — the list card's posting date, taken from the `datetime` attribute (e.g. `'2026-07-21'`) rather than the relative display text ("5 days ago"), which goes stale the moment it's stored. Read and captured the same way as `location`.
-- **`tags`** — the *values* (not the labels) from the detail pane's job-criteria list: seniority level, employment type, job function, industries, in whatever order LinkedIn renders them. `null` and `[]` mean different things, the same way they do for `companyAddresses`: `[]` means the detail pane was read and the job genuinely lists no criteria, `null` means the read never happened or failed.
+- **`tags`** — the *values* (not the labels) from the detail pane's job-criteria list: seniority level, employment type, job function, industries, in whatever order LinkedIn renders them. Present only on a `'success'` result (always `null` on `'failed'`); `[]` means the detail pane was read and the job genuinely lists no criteria.
 
 ### `companyAddresses` shape
 

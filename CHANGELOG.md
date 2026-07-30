@@ -2,6 +2,51 @@
 
 All notable changes to this project are documented in this file.
 
+## v0.4.7
+
+### Changed
+
+- `src/scraper.ts` (823 lines) is split into `src/scraper/`, one function per file, with `index.ts` as the folder's barrel. No public API change: `src/index.ts` re-exports exactly the same 9 values (`runScrape`, `scrapeJob`, `scrapeAllJobsOnce`, `clearBlockingOverlays`, `scrollLoadPhase`, `clickLoadPhase`, `registerJobOccurrence`, `isCompanyMismatch`, `isStaleResult`) and 4 types (`ScrapeContext`, `ScrapeJobOptions`, `ScrollLoadPhaseOptions`, `ClickLoadPhaseOptions`) it always did, unchanged.
+
+## v0.4.6
+
+### Changed
+
+- `JobResult` is now a discriminated union, `SuccessfulJobResult | FailedJobResult`, instead of one flat type. This restores per-job failure isolation: `scrapeJob()` catches its own errors again and returns a `FailedJobResult` (`status: 'failed'`, `error` carrying the thrown message) instead of throwing — fixes a v0.4.5 regression where a single job's failure aborted the entire `runScrape()` run and discarded every already-scraped result. `error` is now exclusive to `FailedJobResult` (not present at all on a successful result). `JobStatus` dropped `'skipped'`, which nothing has produced since v0.4.4.
+- Fixed a v0.4.5 regression that silently deleted `normalizeJobUrl`, `hostnameOf`, and `jobIdFromUrl` from `src/url.ts`'s exports. All three are restored, unchanged in behavior from before v0.4.5.
+
+## v0.4.5
+
+### Changed
+
+- `JobResult.company`, `descriptionText`, `sourceJobId`, `sourceUrl`, `sourceHostname`, `companyUrl`, `location`, `postedAt`, and `tags` changed from nullable (`T | null`) to required (`T`) — `scrapeJob()` already threw instead of returning `null` for most of these; `postedAt` and `tags` are now the same. `scrapeJob()` throws `Error('No posted date found for list item')` when a job's list card has no readable `datetime` attribute, and `Error('No job criteria found for job item')` when the detail pane's job-criteria list can't be read (an empty-but-readable list still resolves to `tags: []`, not a throw).
+- Fixed a bug in `scrapeJob()`'s internal `trim` helper where a failed job-criteria read (`allInnerTexts()` throwing) bypassed its own error handling and leaked the raw Playwright error instead of being caught and converted.
+- `JobResult.companyAddresses` is unchanged and remains `CompanyAddress[] | null` — a company-page lookup failure still does not fail the job (see `companyLookup.ts`).
+
+## v0.4.4
+
+### Changed
+
+- `scrapeJob()` now throws `Error('No job title found for this list item — LinkedIn markup has likely changed')`, when a job in the LinkedIn job search list has no `<h3>` job title or its inner text can't be read.
+- `scrapeJob()` now throws if `await jobItem.scrollIntoViewIfNeeded()` throws.
+- `JobResult.title` changed from type `string | null` to `string`.
+
+## v0.4.3
+
+### Added
+
+- `.prettierrc` file
+
+### Changed
+
+- Renamed `SearchParams.keywords` to `SearchParams.keyword`, because the original `keywords` search parameter name from LinkedIn is missleading.
+
+## v0.4.1 / v0.4.2
+
+> Forgot what I did here. Must have been something minor.
+> v0.4.1 pointed to the refactor branch commit.
+> v0.4.2 pointed to the `main` branch merge commit
+
 ## v0.4.0
 
 > `JobResult` gains three required properties: `location`, `postedAt` and `tags`.
@@ -10,7 +55,7 @@ All notable changes to this project are documented in this file.
 
 - `JobResult.location` — the list card's location text (`span.job-search-card__location`), scraped verbatim with no parsing. Read at the same point as `sourceUrl`/`companyUrl`, so it survives a later click/detail-pane failure. `null` when the card carries no usable location span.
 - `JobResult.postedAt` — the list card's posting date, read from `time.job-search-card__listdate`'s `datetime` attribute (e.g. `'2026-07-21'`) rather than the relative display text ("5 days ago"), which goes stale the moment it's stored.
-- `JobResult.tags` — the *values* (not labels) from the detail pane's job-criteria list (`ul.description__job-criteria-list`), i.e. seniority level, employment type, job function and industries, as `string[]`. `[]` and `null` are distinct, the same way they are for `companyAddresses`: `[]` means the detail pane was read and the job genuinely lists no criteria, `null` means the read never happened or failed.
+- `JobResult.tags` — the _values_ (not labels) from the detail pane's job-criteria list (`ul.description__job-criteria-list`), i.e. seniority level, employment type, job function and industries, as `string[]`. `[]` and `null` are distinct, the same way they are for `companyAddresses`: `[]` means the detail pane was read and the job genuinely lists no criteria, `null` means the read never happened or failed.
 - `LIST_LOCATION_SELECTOR`, `LIST_POSTED_AT_SELECTOR` and `JOB_CRITERIA_VALUE_SELECTOR` exported from `src/selectors.ts`.
 
 ### Changed
@@ -26,7 +71,7 @@ All notable changes to this project are documented in this file.
 ### Added
 
 - `JobResult.companyAddresses` — the office addresses published on the hiring company's LinkedIn page, as `CompanyAddress[]`, **with the address LinkedIn tags "Primary" at index 0**. `[]` and `null` are distinct: `[]` means the page was read and the company publishes no address, `null` means no lookup happened or it failed. Roughly 30% of companies genuinely publish none.
-- `JobResult.companyUrl` — the absolute, normalized URL of that company page, read from the card's company link (`h4.base-search-card__subtitle a`) during the same identity read as `sourceUrl`, so it survives a later click/detail-pane failure. This is also the key the run's address cache uses; the company *display name* is deliberately not used, since LinkedIn abbreviates it in the list ("Slalom" for `slalom-consulting`) in ways that collide between unrelated companies.
+- `JobResult.companyUrl` — the absolute, normalized URL of that company page, read from the card's company link (`h4.base-search-card__subtitle a`) during the same identity read as `sourceUrl`, so it survives a later click/detail-pane failure. This is also the key the run's address cache uses; the company _display name_ is deliberately not used, since LinkedIn abbreviates it in the list ("Slalom" for `slalom-consulting`) in ways that collide between unrelated companies.
 - `CompanyAddress` and `RawCompanyLocation` types. `CompanyAddress` is `{ streetAddress, city, postalCode, countryCode }`, all nullable. `postalCode` holds the region and postal code together (`'Hessen 60313'`, `'WA 98104'`) because LinkedIn renders them joined with a plain space and no separator that distinguishes them.
 - `ScraperOptions.companyLookup` — `navigationTimeoutMs` (20000), `emptyRetries` (1), `delayBetweenLookupsMs` (900) and `maxAddressesPerCompany` (uncapped), all optional and defaulted in the engine like every other tuning constant.
 - `src/address.ts`, exporting the pure parsers `parseLocalityLine`, `parseCompanyLocation` and `toCompanyAddresses`, so a stored company page can be re-parsed without re-scraping.
@@ -67,5 +112,5 @@ All notable changes to this project are documented in this file.
 - `sourceHostname` returns `null` instead of an empty string for hrefs whose scheme carries no hostname. `new URL('javascript:void(0)')` parses without throwing and reports `hostname === ''`, so the previous try/catch let through a value that was neither `null` nor a hostname. Such hrefs now null out `sourceUrl` as well, restoring the documented "`null` exactly when `sourceUrl` is `null`" invariant.
 - Both card attribute reads now pass an explicit `{ timeout: 1000 }`. They previously inherited Playwright's 30s default, and since `getAttribute` auto-waits for its element, one renamed or missing class cost ~30s per job — roughly an hour on a 120-job run, silently swallowed by the surrounding `.catch()`.
 - The `data-entity-urn` read is now individually guarded. It previously had neither a timeout nor a `.catch()`, so a missing `.base-card` both stalled and threw away the rest of the identity — including the `sourceUrl` that is meant to survive a later failure.
-- `sourceJobId` now falls back to the trailing posting ID in `sourceUrl` when `data-entity-urn` is unreadable. A null `sourceJobId` silently disables duplicate detection *and* makes `waitForJobDetailToLoad` skip its detail-pane wait, which is the condition that manufactures stale results.
+- `sourceJobId` now falls back to the trailing posting ID in `sourceUrl` when `data-entity-urn` is unreadable. A null `sourceJobId` silently disables duplicate detection _and_ makes `waitForJobDetailToLoad` skip its detail-pane wait, which is the condition that manufactures stale results.
 - The four per-job identity reads now run concurrently instead of as four sequential round-trips.
