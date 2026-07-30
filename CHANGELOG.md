@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented in this file.
 
+## v0.4.7
+
+### Changed
+
+- `src/scraper.ts` (823 lines) is split into `src/scraper/`, one function per file, with `index.ts` as the folder's barrel. No public API change: `src/index.ts` re-exports exactly the same 9 values (`runScrape`, `scrapeJob`, `scrapeAllJobsOnce`, `clearBlockingOverlays`, `scrollLoadPhase`, `clickLoadPhase`, `registerJobOccurrence`, `isCompanyMismatch`, `isStaleResult`) and 4 types (`ScrapeContext`, `ScrapeJobOptions`, `ScrollLoadPhaseOptions`, `ClickLoadPhaseOptions`) it always did, unchanged.
+
 ## v0.4.6
 
 ### Changed
