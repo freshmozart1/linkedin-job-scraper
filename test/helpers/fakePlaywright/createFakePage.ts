@@ -6,12 +6,17 @@ export interface FakePageConfig {
     locatorsBySelector?: Record<string, Locator>;
     defaultLocator?: Locator;
     /**
-     * page.evaluate() is called both for collectJobIds() (reads job ids from
-     * the DOM) and for the scrollLoadPhase() scrollTo() side effect; the
-     * latter's return value is discarded, so it's safe to only model the
-     * former. Called once per page.evaluate() invocation.
+     * page.evaluate() is called for several distinct shapes across the
+     * scraper: collectJobIds()-style reads (no arg), scrollLoadPhase()'s
+     * one-time hide-sections call (return value unused), and its per-<li>
+     * scroll calls (the <li> index as an explicit numeric arg, expecting
+     * that <li>'s height back or `null` past the currently-rendered
+     * range). Receives the real `arg` Playwright would pass so a test's
+     * config can dispatch on it (e.g. `typeof arg === 'number'`) instead of
+     * one generic stub being misinterpreted by every call shape. Called
+     * once per page.evaluate() invocation.
      */
-    evaluate?: () => unknown | Promise<unknown>;
+    evaluate?: (arg?: unknown) => unknown | Promise<unknown>;
     waitForLoadState?: () => void | Promise<void>;
     /**
      * The guest search URL the page is sitting on. LinkedIn re-renders the
@@ -35,7 +40,8 @@ export function createFakePage(config: FakePageConfig = {}): Page {
         url: () =>
             config.url?.() ??
             'https://www.linkedin.com/jobs/search?keywords=frontend',
-        evaluate: async () => (config.evaluate ? config.evaluate() : undefined),
+        evaluate: async (_pageFunction?: unknown, arg?: unknown) =>
+            config.evaluate ? config.evaluate(arg) : undefined,
         waitForLoadState: async () => {
             if (config.waitForLoadState) await config.waitForLoadState();
         },
