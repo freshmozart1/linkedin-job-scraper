@@ -2,10 +2,11 @@
 // Exported so consumers (and this package's own tests) don't have to
 // hand-duplicate these strings.
 //
-// JOB_LIST_SELECTOR is also hardcoded literally inside collectJobIds()'s
-// page.evaluate() in scraper/collectJobIds.ts (page.evaluate serializes the
-// callback via toString(), so it can't close over this module's exports) —
-// keep both in sync if this ever changes.
+// JOB_LIST_SELECTOR is also hardcoded literally inside collectJobIds()'s and
+// scrollToListItem()'s page.evaluate() calls (scraper/collectJobIds.ts and
+// scraper/scrollToListItem.ts — page.evaluate serializes the callback via
+// toString(), so it can't close over this module's exports) — keep all
+// three copies in sync if this ever changes.
 export const JOB_LIST_SELECTOR = 'ul.jobs-search__results-list > li';
 export const SEE_MORE_BUTTON_SELECTOR =
     'button.infinite-scroller__show-more-button';

@@ -10,11 +10,12 @@ export interface FakePageConfig {
      * scraper: collectJobIds()-style reads (no arg), scrollLoadPhase()'s
      * one-time hide-sections call (return value unused), and its per-<li>
      * scroll calls (the <li> index as an explicit numeric arg, expecting
-     * that <li>'s height back or `null` past the currently-rendered
-     * range). Receives the real `arg` Playwright would pass so a test's
-     * config can dispatch on it (e.g. `typeof arg === 'number'`) instead of
-     * one generic stub being misinterpreted by every call shape. Called
-     * once per page.evaluate() invocation.
+     * `{ height, renderedCount }` back — `height` is `null` past the
+     * currently-rendered range, `renderedCount` is the live list length).
+     * Receives the real `arg` Playwright would pass so a test's config can
+     * dispatch on it (e.g. `typeof arg === 'number'`) instead of one
+     * generic stub being misinterpreted by every call shape. Called once
+     * per page.evaluate() invocation.
      */
     evaluate?: (arg?: unknown) => unknown | Promise<unknown>;
     waitForLoadState?: () => void | Promise<void>;

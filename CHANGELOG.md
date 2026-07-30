@@ -7,6 +7,11 @@ All notable changes to this project are documented in this file.
 ### Fixed
 
 - `scrollLoadPhase` no longer caps `totalJobs` at ~60 for every run. It previously advanced the page with a single `scrollTo(0, document.body.scrollHeight)` jump per iteration, which LinkedIn's own lazy-load listener never reacts to — only genuine incremental scroll progress triggers it — so the unique job count never grew past the ~60 jobs LinkedIn pre-renders on initial load. It now scrolls one `<li>` at a time, pausing briefly between each, after hiding the page sections LinkedIn renders above the job list so each `<li>`'s own height is the exact scroll distance to the next one. Verified live against real LinkedIn (see `CLAUDE.md`'s Testing section) that this grows the unique count well past 60 before correctly handing off to `clickLoadPhase`.
+- Fixed a resume-index bug in that same fix: the per-`<li>` scroll walk tracked how far it had scrolled with an index that only ever increased. If LinkedIn re-serves a shorter page than what had already been scrolled through — a real, documented scenario (see `collectJobIds.ts`) — that index permanently pointed past the end of the (now shorter) list, and the phase would idle on its fallback pause until `stableScrollsToStop`/`maxScrollAttempts` cut it off, silently under-scraping instead of recovering. The walk now detects a live `<li>` count smaller than its resume point and restarts from the top instead of stalling.
+
+### Changed
+
+- `scrollLoadPhase.ts`'s three internal helpers (`hidePageSectionsAboveJobList`, `scrollToListItem`, `scrollNewlyRenderedListItems`) are split into their own files, per `src/scraper/`'s one-function-per-file convention. No public API change — none of the three were ever re-exported from `scraper/index.ts`.
 
 ## v0.4.7
 
