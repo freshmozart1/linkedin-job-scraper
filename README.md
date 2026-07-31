@@ -54,7 +54,7 @@ scraperOptions: {
 
 ## Return value: `ScrapeOutcome`
 
-`runScrape` resolves once every job has been scraped and the browser it launched has been closed. It never resolves partially — if the run throws, nothing is returned, so wrap the call if you want to keep partial data (collect it from `onProgress` instead).
+`runScrape` resolves once every job has been scraped and the browser it launched has been closed. It never resolves partially — if the run throws, nothing is returned. Collect partial data from `onProgress` as the run goes, or, for a cancelled run specifically, from the thrown `ScrapeAbortedError` itself (see [Cancellation](#cancellation) below).
 
 ```ts
 interface ScrapeOutcome {
@@ -149,6 +149,33 @@ LinkedIn prints an address as up to two optional street lines plus one locality 
 ```
 
 Every field is nullable because LinkedIn omits parts freely. The one known parse limitation: a city containing commas puts its own overflow into `postalCode`, since nothing in the markup says where the city ends (1 occurrence in a 461-address sample).
+
+## Cancellation
+
+Pass an `AbortSignal` to stop a scrape early:
+
+```ts
+import { runScrape, ScrapeAbortedError } from 'linkedin-job-scraper';
+
+const controller = new AbortController();
+setTimeout(() => controller.abort(), 30000); // give up after 30s
+
+try {
+  const outcome = await runScrape({
+    signal: controller.signal,
+    searchParams: { keywords: 'Frontend Developer' },
+  });
+  console.log(outcome.results);
+} catch (error) {
+  if (error instanceof ScrapeAbortedError) {
+    console.log(error.partial.results); // whatever was scraped before cancellation
+  } else {
+    throw error;
+  }
+}
+```
+
+Aborting doesn't stop `runScrape` mid-job — it stops at the next safe checkpoint (between jobs, or during the job-loading scroll/click polling loops), then always closes the browser via `runScrape`'s own cleanup before rejecting. The rejection is a `ScrapeAbortedError`, not a resolved `ScrapeOutcome`: `error.name === 'AbortError'` (the same convention `fetch` uses) tells a cancelled run apart from any other failure, and `error.partial: ScrapeOutcome` carries whatever `results`/`url` had already been collected at that checkpoint — `results` is `[]` if the signal was already aborted before the run started or during job loading, before any job was scraped.
 
 ## Progress events
 
