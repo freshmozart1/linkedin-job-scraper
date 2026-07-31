@@ -37,14 +37,24 @@ interface JobResultBase {
     index: number;
     /**
      * Whether the detail-pane company disagreed with the list-pane company for
-     * this job — the primary signal `isStaleResult` uses to catch a detail pane
+     * this job — one of the signals `isStaleResult` uses to catch a detail pane
      * that didn't re-render after a click. It cannot catch a pane left over
      * from an earlier posting at the *same* company: two back-to-back postings
      * from the same employer read as a match here even if the pane never
-     * updated, so `descriptionText`/`tags` can silently carry the earlier
-     * job's values in that case. Always `false` on a `'failed'` result.
+     * updated. `sourceJobIdMismatch` closes that gap. Always `false` on a
+     * `'failed'` result.
      */
     companyMismatch: boolean;
+    /**
+     * Whether the detail pane's own title-link href (see
+     * `DETAIL_TITLE_LINK_SELECTOR`) carries a different job ID than this
+     * job's `sourceJobId` — the signal `isStaleResult` uses to catch a
+     * detail pane left over from an earlier posting at the *same* company,
+     * which `companyMismatch` alone cannot see. `false` when the detail
+     * title link couldn't be read at all, not just when the IDs agree.
+     * Always `false` on a `'failed'` result.
+     */
+    sourceJobIdMismatch: boolean;
     /** Whether a LinkedIn sign-in overlay was detected reappearing late, around when this job's data was read. Always `false` on a `'failed'` result. */
     lateOverlayDetected: boolean;
     /** ISO-8601 timestamp (`new Date().toISOString()`) marking when this job's result was finalized — always set, even for `'failed'` results. */
@@ -58,7 +68,7 @@ export interface SuccessfulJobResult extends JobResultBase {
     status: 'success';
     title: string;
     company: string;
-    /** Detail-pane job description text. Subject to the same-company staleness blind spot documented on `companyMismatch`. */
+    /** Detail-pane job description text. `sourceJobIdMismatch` (alongside `companyMismatch`) flags when this may actually belong to an earlier posting. */
     descriptionText: string;
     /**
      * LinkedIn's numeric posting ID, read from the list item's `data-entity-urn`
@@ -136,8 +146,9 @@ export interface SuccessfulJobResult extends JobResultBase {
      * order LinkedIn renders them — as plain strings.
      *
      * `[]` means the detail pane was read and the job genuinely lists no
-     * criteria; `scrapeJob` throws if the read itself fails. Subject to the
-     * same-company staleness blind spot documented on `companyMismatch`.
+     * criteria; `scrapeJob` throws if the read itself fails.
+     * `sourceJobIdMismatch` (alongside `companyMismatch`) flags when this
+     * may actually belong to an earlier posting.
      */
     tags: string[];
 }
@@ -188,8 +199,9 @@ export interface JobDoneEvent {
 }
 /**
  * Emitted instead of `job:done` when the scrape technically succeeded but the
- * result is suspect: the detail-pane company disagreed with the list, or a
- * sign-in overlay was still visible right when this job's data was read. See
+ * result is suspect: the detail-pane company disagreed with the list, the
+ * detail pane's own job ID disagreed with the clicked job's, or a sign-in
+ * overlay was still visible right when this job's data was read. See
  * `isStaleResult`. Never emitted for a `status: 'failed'` result — a failed
  * scrape always emits `job:done`.
  */
@@ -213,6 +225,15 @@ export interface ScrapeOutcome {
 export interface CompanyMismatchCheck {
     listCompany: string | null;
     detailCompany: string | null;
+}
+
+export interface SourceJobIdMismatchCheck {
+    /** The clicked job's own posting ID, from the list card. */
+    sourceJobId: string | null;
+    /** The detail pane's title-link `href` (see `DETAIL_TITLE_LINK_SELECTOR`), unread. */
+    detailTitleHref: string | null;
+    /** The page's current URL, used to resolve a relative `detailTitleHref`. */
+    baseUrl: string;
 }
 
 /**

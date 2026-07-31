@@ -19,6 +19,7 @@ export { scrollLoadPhase } from './scrollLoadPhase';
 export { clickLoadPhase } from './clickLoadPhase';
 export { registerJobOccurrence } from './registerJobOccurrence';
 export { isCompanyMismatch } from './isCompanyMismatch';
+export { isSourceJobIdMismatch } from './isSourceJobIdMismatch';
 export { isStaleResult } from './isStaleResult';
 
 export type { ScrapeContext } from './scrapeContext';

@@ -36,6 +36,17 @@ export const LIST_POSTED_AT_SELECTOR =
 /** Each value span inside the detail pane's job-criteria list (seniority level, employment type, job function, industries). Labels are not scraped, only values. */
 export const JOB_CRITERIA_VALUE_SELECTOR =
     '.description__job-criteria-text--criteria';
+/**
+ * The detail pane's own title link. Its `href` is the canonical URL of
+ * whichever posting is currently rendered in the pane — including that
+ * posting's own job ID — independent of the company text, which is what
+ * lets a pane left over from an earlier posting at the *same* company still
+ * be caught (confirmed live: two different postings from one company each
+ * render this href with their own distinct job ID). `waitForJobDetailToLoad`
+ * appends its own `[href*="-<jobId>"]` filter onto this same base selector
+ * rather than duplicating the `topcard-title` string.
+ */
+export const DETAIL_TITLE_LINK_SELECTOR = 'a[href*="topcard-title"]';
 
 // Company page ("Locations" section). COMPANY_LOCATION_ITEM_SELECTOR and
 // COMPANY_PRIMARY_TAG_SELECTOR are also hardcoded literally inside

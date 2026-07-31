@@ -89,8 +89,9 @@ export async function scrapeJob(
             company,
             descriptionText,
             companyMismatch,
+            sourceJobIdMismatch,
             lateOverlayDetected,
-        } = await readJobDetailPane(jobItem, page);
+        } = await readJobDetailPane(jobItem, page, sourceJobId);
 
         // Deliberately after readJobDetailPane's checkForLateOverlay: that check
         // has to stay tight against the company/description reads it validates,
@@ -117,6 +118,7 @@ export async function scrapeJob(
             descriptionText,
             status: 'success',
             companyMismatch,
+            sourceJobIdMismatch,
             lateOverlayDetected,
             sourceJobId,
             sourceUrl,
@@ -138,6 +140,7 @@ export async function scrapeJob(
             status: 'failed',
             error: error instanceof Error ? error.message : String(error),
             companyMismatch: false,
+            sourceJobIdMismatch: false,
             lateOverlayDetected: false,
             sourceJobId: identity.sourceJobId,
             sourceUrl: identity.sourceUrl,
