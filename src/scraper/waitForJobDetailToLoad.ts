@@ -1,4 +1,5 @@
 import type { Page } from 'playwright';
+import { DETAIL_TITLE_LINK_SELECTOR } from '../selectors';
 
 // The detail pane re-renders client-side after a click; networkidle alone
 // doesn't guarantee that DOM patch has landed (it only tracks network quiet
@@ -10,7 +11,7 @@ export async function waitForJobDetailToLoad(
 ): Promise<void> {
     if (sourceJobId) {
         await page
-            .locator(`a[href*="topcard-title"][href*="-${sourceJobId}"]`)
+            .locator(`${DETAIL_TITLE_LINK_SELECTOR}[href*="-${sourceJobId}"]`)
             .first()
             .waitFor({ state: 'visible', timeout: 8000 })
             .catch(() => {});

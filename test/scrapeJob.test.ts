@@ -59,6 +59,7 @@ describe('scrapeJob()', () => {
         assert.equal(result.company, 'Acme');
         assert.equal(result.descriptionText, 'A description.');
         assert.equal(result.companyMismatch, false);
+        assert.equal(result.sourceJobIdMismatch, false);
         assert.equal(result.lateOverlayDetected, false);
         assert.equal(result.sourceJobId, '111');
         assert.equal(
@@ -74,6 +75,50 @@ describe('scrapeJob()', () => {
         assert.equal(result.location, 'Berlin, Berlin, Germany');
         assert.equal(result.postedAt, '2026-07-21');
         assert.deepEqual(result.tags, ['Full-time']);
+    });
+    it('flags a same-company stale detail pane via sourceJobIdMismatch even though companyMismatch misses it', async ({
+        assert,
+    }) => {
+        // Reproduces GitHub issue #17: the detail pane is left over from an
+        // earlier posting at the *same* company ('Acme' on both sides), so
+        // companyMismatch can't see it — but the detail pane's own title
+        // link still carries the earlier job's ID ('111'), not this job's
+        // ('222'), which is what sourceJobIdMismatch is for.
+        const jobItem = createFakeJobLocator({
+            title: 'Frontend Developer',
+            listCompany: 'Acme',
+            sourceJobId: '222',
+            sourceUrl:
+                'https://de.linkedin.com/jobs/view/frontend-developer-at-acme-222',
+            location: 'Berlin, Berlin, Germany',
+            postedAt: '2026-07-21',
+            companyUrl: 'https://de.linkedin.com/company/acme',
+        });
+        const page = createFakePage({
+            locatorsBySelector: {
+                [JOB_LIST_SELECTOR]: createFakeLocator({ nth: () => jobItem }),
+                ...baseScrapeJobLocators(
+                    () => 'Acme',
+                    'A description.',
+                    ['Full-time'],
+                    '111',
+                ),
+            },
+            defaultLocator: createFakeLocator({
+                waitFor: () => {},
+                isVisible: () => false,
+            }),
+        });
+
+        const result = await scrapeJob(page, 0, 1, {
+            seenSourceJobIds: new Map(),
+            runTimestamp: 123,
+            companyLookup: stubCompanyLookup(),
+        });
+
+        assert.equal(result.status, 'success');
+        assert.equal(result.companyMismatch, false);
+        assert.equal(result.sourceJobIdMismatch, true);
     });
     it('returns a failed result when the list item has no job title', async ({
         assert,

@@ -23,6 +23,7 @@ export {
     clickLoadPhase,
     registerJobOccurrence,
     isCompanyMismatch,
+    isSourceJobIdMismatch,
     isStaleResult,
 } from './scraper';
 export type {

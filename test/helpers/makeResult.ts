@@ -9,6 +9,7 @@ export function makeResult(
         descriptionText: '',
         status: 'success',
         companyMismatch: false,
+        sourceJobIdMismatch: false,
         lateOverlayDetected: false,
         sourceJobId: '',
         sourceUrl: '',

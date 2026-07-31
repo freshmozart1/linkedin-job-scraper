@@ -16,6 +16,15 @@ describe('isStaleResult()', () => {
         );
     });
 
+    it('is true for a successful result with a source job ID mismatch', ({
+        assert,
+    }) => {
+        assert.equal(
+            isStaleResult(makeResult({ index: 0, sourceJobIdMismatch: true })),
+            true,
+        );
+    });
+
     it('is true for a successful result with a late overlay detected', ({
         assert,
     }) => {
@@ -36,6 +45,7 @@ describe('isStaleResult()', () => {
                 company: null,
                 descriptionText: null,
                 companyMismatch: true,
+                sourceJobIdMismatch: true,
                 lateOverlayDetected: true,
                 sourceJobId: null,
                 sourceUrl: null,
