@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented in this file.
 
+## v0.4.9
+
+### Added
+
+- `ScraperOptions._closeBrowserAfterScrape?: { jobList?: boolean; companyPage?: boolean }` — an internal, debug-only escape hatch that lets someone debugging the built package leave the job-list browser and/or the company-lookup context open after `runScrape` finishes, instead of both being closed as usual. Only takes effect when `headless: false` is also set; ignored on headless runs, which always close normally.
+
 ## v0.4.8
 
 ### Fixed

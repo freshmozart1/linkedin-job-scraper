@@ -77,6 +77,10 @@ Stale jobs get **exactly one** retry, deferred until the whole list has been scr
 
 `onProgress` receives a `ScrapeProgressEvent` union: `jobs:loading` (unique count grew during loading), `jobs:found` (loading done, total about to be scraped), `job:start`, and then **either** `job:done` **or** `job:stale` per job — never both. A retry re-emits for the same index.
 
+### Debug-only browser retention
+
+`runScrape`'s `finally` block always closes `companyLookup`'s context and the shared `browser` — except when `scraperOptions.headless === false` and `scraperOptions._closeBrowserAfterScrape.jobList`/`companyPage` is explicitly set to `false`. This is deliberately internal (leading underscore, JSDoc-flagged "not for regular consumers"): it exists so someone debugging the *built* package can inspect a headed run's browser state after `runScrape` returns instead of losing it the instant the call resolves. It's ignored entirely on a headless run — there's no window to inspect there, so that case always closes normally regardless of the option.
+
 ## Company addresses: the cookie jar is load-bearing
 
 The single most important fact in this repo. **LinkedIn only serves a company page's `section.locations` to a cookie jar that has not already seen a company page.** Load two company pages in a row on the same `BrowserContext` and the second one comes back *without* the section — no error, no `/authwall` redirect, the markup is simply absent. That degraded page is byte-for-byte indistinguishable from a company that genuinely publishes no address, so getting this wrong doesn't fail loudly; it quietly reports every company as address-less.
