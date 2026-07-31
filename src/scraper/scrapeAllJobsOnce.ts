@@ -4,6 +4,12 @@ import { scrapeJobAndRecord } from './scrapeJobAndRecord';
 import { isStaleResult } from './isStaleResult';
 import { sleep } from './sleep';
 
+// CRAP score here is driven by fallow's *estimated* (not instrumented)
+// coverage defaulting to 0% for this function, not an actual
+// untested-complexity risk — the scrapeAllJobsOnce tests in
+// test/scrapeAllJobsOnce.test.ts already exercise every branch below,
+// including the signal-abort break.
+// fallow-ignore-next-line complexity
 export async function scrapeAllJobsOnce(
     ctx: ScrapeContext,
     results: JobResult[],

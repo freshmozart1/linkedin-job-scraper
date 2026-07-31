@@ -36,7 +36,7 @@ export interface ScrollLoadPhaseOptions {
 //
 // CRAP score here is driven by fallow's *estimated* (not instrumented)
 // coverage defaulting to 0% for this function, not an actual
-// untested-complexity risk — verified via `fallow check_health`; the 5
+// untested-complexity risk — verified via `fallow check_health`; the
 // scrollLoadPhase tests in test/scrollLoadPhase.test.ts already exercise
 // every branch below.
 // fallow-ignore-next-line complexity
