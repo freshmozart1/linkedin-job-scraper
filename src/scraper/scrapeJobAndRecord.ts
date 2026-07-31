@@ -10,7 +10,7 @@ export async function scrapeJobAndRecord(
     options: { preClickDelayMs?: number } = {},
 ): Promise<JobResult> {
     ctx.onProgress?.({ type: 'job:start', index, total: ctx.totalJobs });
-    const result = await scrapeJob(ctx.page, index, ctx.totalJobs, {
+    const result = await scrapeJob(ctx.page, index, {
         ...options,
         seenSourceJobIds: ctx.seenSourceJobIds,
         runTimestamp: ctx.runTimestamp,

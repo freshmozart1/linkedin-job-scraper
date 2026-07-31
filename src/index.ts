@@ -26,6 +26,7 @@ export {
     isCompanyMismatch,
     isSourceJobIdMismatch,
     isStaleResult,
+    clampTotalJobs,
 } from './scraper';
 export type {
     ScrapeContext,

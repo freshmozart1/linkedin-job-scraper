@@ -26,7 +26,6 @@ export interface ScrapeJobOptions {
 export async function scrapeJob(
     page: Page,
     index: number,
-    total: number,
     options: ScrapeJobOptions,
 ): Promise<JobResult> {
     const jobItem = jobItemsLocator(page).nth(index);

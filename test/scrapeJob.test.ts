@@ -48,7 +48,7 @@ describe('scrapeJob()', () => {
             }),
         });
 
-        const result = await scrapeJob(page, 0, 1, {
+        const result = await scrapeJob(page, 0, {
             seenSourceJobIds: new Map(),
             runTimestamp: 123,
             companyLookup: stubCompanyLookup(),
@@ -110,7 +110,7 @@ describe('scrapeJob()', () => {
             }),
         });
 
-        const result = await scrapeJob(page, 0, 1, {
+        const result = await scrapeJob(page, 0, {
             seenSourceJobIds: new Map(),
             runTimestamp: 123,
             companyLookup: stubCompanyLookup(),
@@ -135,7 +135,7 @@ describe('scrapeJob()', () => {
             },
         });
 
-        const result = await scrapeJob(page, 7, 10, {
+        const result = await scrapeJob(page, 7, {
             seenSourceJobIds: new Map(),
             runTimestamp: 123,
             companyLookup: stubCompanyLookup(),
@@ -172,7 +172,7 @@ describe('scrapeJob()', () => {
         });
         const seenSourceJobIds = new Map<string, number>([['111', 0]]);
 
-        const result = await scrapeJob(page, 3, 10, {
+        const result = await scrapeJob(page, 3, {
             seenSourceJobIds,
             runTimestamp: 123,
             companyLookup: stubCompanyLookup(),
@@ -195,7 +195,7 @@ describe('scrapeJob()', () => {
             },
         });
 
-        const result = await scrapeJob(page, 2, 10, {
+        const result = await scrapeJob(page, 2, {
             seenSourceJobIds: new Map(),
             runTimestamp: 123,
             companyLookup: stubCompanyLookup(),
@@ -545,7 +545,7 @@ describe('scrapeJob()', () => {
             }),
         });
 
-        const result = await scrapeJob(page, 0, 1, {
+        const result = await scrapeJob(page, 0, {
             seenSourceJobIds: new Map(),
             runTimestamp: 123,
             companyLookup: stubCompanyLookup(),
@@ -583,7 +583,7 @@ describe('scrapeJob()', () => {
             }),
         });
 
-        const result = await scrapeJob(page, 0, 1, {
+        const result = await scrapeJob(page, 0, {
             seenSourceJobIds: new Map(),
             runTimestamp: 123,
             companyLookup: stubCompanyLookup(),
@@ -623,7 +623,7 @@ describe('scrapeJob()', () => {
             }),
         });
 
-        const result = await scrapeJob(page, 0, 1, {
+        const result = await scrapeJob(page, 0, {
             seenSourceJobIds: new Map(),
             runTimestamp: 123,
             companyLookup: stubCompanyLookup(),
@@ -667,7 +667,7 @@ describe('scrapeJob()', () => {
             }),
         });
 
-        const result = await scrapeJob(page, 0, 1, {
+        const result = await scrapeJob(page, 0, {
             seenSourceJobIds: new Map(),
             runTimestamp: 123,
             companyLookup: stubCompanyLookup(),
@@ -709,7 +709,7 @@ describe('scrapeJob()', () => {
             }),
         });
 
-        const result = await scrapeJob(page, 0, 1, {
+        const result = await scrapeJob(page, 0, {
             seenSourceJobIds: new Map(),
             runTimestamp: 123,
             companyLookup: stubCompanyLookup(),

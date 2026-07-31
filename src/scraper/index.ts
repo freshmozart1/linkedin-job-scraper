@@ -22,6 +22,7 @@ export { registerJobOccurrence } from './registerJobOccurrence';
 export { isCompanyMismatch } from './isCompanyMismatch';
 export { isSourceJobIdMismatch } from './isSourceJobIdMismatch';
 export { isStaleResult } from './isStaleResult';
+export { clampTotalJobs } from './clampTotalJobs';
 
 export type { ScrapeContext } from './scrapeContext';
 export type { ScrapeJobOptions } from './scrapeJob';
