@@ -11,6 +11,7 @@ export async function scrapeAllJobsOnce(
     const delayBetweenJobsMs = ctx.delayBetweenJobsMs ?? 700;
     const staleIndices: number[] = [];
     for (let i = 0; i < ctx.totalJobs; i++) {
+        if (ctx.signal?.aborted) break;
         const result = await scrapeJobAndRecord(ctx, results, i);
         if (isStaleResult(result)) staleIndices.push(i);
         await sleep(delayBetweenJobsMs);

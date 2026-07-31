@@ -9,6 +9,7 @@ export interface ClickLoadPhaseOptions {
     stableClicksToStop?: number;
     clickRetryAttempts?: number;
     onProgress?: (event: ScrapeProgressEvent) => void;
+    signal?: AbortSignal;
 }
 
 // Phase B: past 120 items LinkedIn requires clicking "See more jobs" for
@@ -30,18 +31,24 @@ export async function clickLoadPhase(
         stableClicksToStop = 3,
         clickRetryAttempts,
         onProgress,
+        signal,
     } = options;
     const viewedAllBanner = page.locator(VIEWED_ALL_JOBS_SELECTOR);
     let stableClicks = 0;
     let previousUniqueCount = initialUniqueCount;
 
     for (let attempt = 0; attempt < maxSeeMoreClicks; attempt++) {
+        if (signal?.aborted) break;
         if (await viewedAllBanner.isVisible().catch(() => false)) break;
         if (!(await seeMoreButton.isVisible().catch(() => false))) break;
 
         const beforeClickCount = previousUniqueCount;
         await clickWithOverlayRetries(seeMoreButton, page, clickRetryAttempts);
-        const currentUniqueCount = await pollForNewJobs(page, beforeClickCount);
+        const currentUniqueCount = await pollForNewJobs(
+            page,
+            beforeClickCount,
+            signal,
+        );
 
         if (currentUniqueCount === beforeClickCount) {
             stableClicks += 1;

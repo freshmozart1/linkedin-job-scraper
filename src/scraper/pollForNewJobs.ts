@@ -8,9 +8,11 @@ import { collectJobIds } from './collectJobIds';
 export async function pollForNewJobs(
     page: Page,
     previousCount: number,
+    signal?: AbortSignal,
 ): Promise<number> {
     let currentCount = previousCount;
     for (let poll = 0; poll < 10; poll++) {
+        if (signal?.aborted) break;
         await sleep(300);
         currentCount = (await collectJobIds(page)).size;
         if (currentCount !== previousCount) break;

@@ -319,6 +319,13 @@ export interface ScraperOptions {
 
 export interface RunScrapeOptions {
     onProgress?: (event: ScrapeProgressEvent) => void;
+    /**
+     * When aborted, `runScrape` stops at the next safe checkpoint (between jobs in
+     * `scrapeAllJobsOnce`/`retryStaleJobs`, or during the job-loading polling loops)
+     * and rejects with `ScrapeAbortedError` instead of resolving — the browser is
+     * still always closed via `runScrape`'s own `finally` block first.
+     */
+    signal?: AbortSignal;
     searchParams: SearchParams;
     scraperOptions?: ScraperOptions;
 }

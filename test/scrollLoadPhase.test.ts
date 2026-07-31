@@ -193,4 +193,30 @@ describe('scrollLoadPhase()', () => {
             `expected index 0 to be requested again after the shrink, got sequence ${JSON.stringify(scrolledIndexes)}`,
         );
     });
+
+    it('stops immediately when the signal is already aborted, without reading job IDs', async ({
+        assert,
+    }) => {
+        let evaluateCalls = 0;
+        const page = createFakePage({
+            evaluate: (arg?: unknown) => {
+                evaluateCalls += 1;
+                if (typeof arg === 'number')
+                    return { height: null, renderedCount: 0 };
+                return ['a', 'b', 'c'];
+            },
+        });
+        const seeMoreButton = createFakeLocator({ isVisible: () => false });
+        const controller = new AbortController();
+        controller.abort();
+
+        const count = await scrollLoadPhase(page, seeMoreButton, {
+            signal: controller.signal,
+        });
+
+        assert.equal(count, 0);
+        // Only the one-time hide-sections call — the loop's own collectJobIds()
+        // read never happens once the signal is already aborted.
+        assert.equal(evaluateCalls, 1);
+    });
 });

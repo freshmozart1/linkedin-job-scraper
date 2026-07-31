@@ -8,10 +8,12 @@ import { clearBlockingOverlays } from './clearBlockingOverlays';
 import { loadAllJobs } from './loadAllJobs';
 import { scrapeAllJobsOnce } from './scrapeAllJobsOnce';
 import { retryStaleJobs } from './retryStaleJobs';
+import { ScrapeAbortedError } from './ScrapeAbortedError';
 import type { JobResult } from '../types';
 
 export const runScrape: RunScraper = async ({
     onProgress,
+    signal,
     searchParams,
     scraperOptions,
 }: RunScrapeOptions) => {
@@ -19,6 +21,12 @@ export const runScrape: RunScraper = async ({
     // vary per run, nothing more.
     const runTimestamp = Date.now();
     const searchUrl = buildSearchUrl(searchParams);
+    const results: JobResult[] = [];
+
+    // Checked before the browser even launches so an already-aborted signal never
+    // pays for one — nothing to clean up yet, so this stays outside the try/finally
+    // below for the same reason a failing `launch` does.
+    if (signal?.aborted) throw new ScrapeAbortedError({ results, url: searchUrl });
 
     const browser = await chromium.launch({
         headless: scraperOptions?.headless ?? false,
@@ -49,10 +57,16 @@ export const runScrape: RunScraper = async ({
             pollIntervalMs: scraperOptions?.overlayClear?.pollIntervalMs ?? 300,
         });
 
-        const totalJobs = await loadAllJobs(page, scraperOptions, onProgress);
+        const totalJobs = await loadAllJobs(
+            page,
+            scraperOptions,
+            onProgress,
+            signal,
+        );
+        if (signal?.aborted)
+            throw new ScrapeAbortedError({ results, url: searchUrl });
         onProgress?.({ type: 'jobs:found', total: totalJobs });
 
-        const results: JobResult[] = [];
         const ctx: ScrapeContext = {
             page,
             totalJobs,
@@ -62,10 +76,15 @@ export const runScrape: RunScraper = async ({
             delayBetweenJobsMs: scraperOptions?.delayBetweenJobsMs,
             clickRetryAttempts: scraperOptions?.clickRetryAttempts,
             companyLookup,
+            signal,
         };
 
         const staleIndices = await scrapeAllJobsOnce(ctx, results);
+        if (signal?.aborted)
+            throw new ScrapeAbortedError({ results, url: searchUrl });
         await retryStaleJobs(ctx, results, staleIndices);
+        if (signal?.aborted)
+            throw new ScrapeAbortedError({ results, url: searchUrl });
 
         return { results, url: searchUrl };
     } finally {

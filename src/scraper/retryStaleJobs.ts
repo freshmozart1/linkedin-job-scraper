@@ -13,6 +13,7 @@ export async function retryStaleJobs(
 ): Promise<void> {
     const delayBetweenJobsMs = ctx.delayBetweenJobsMs ?? 700;
     for (const i of staleIndices) {
+        if (ctx.signal?.aborted) break;
         await scrapeJobAndRecord(ctx, results, i, { preClickDelayMs: 1000 });
         await sleep(delayBetweenJobsMs);
     }

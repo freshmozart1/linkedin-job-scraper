@@ -111,4 +111,31 @@ describe('clickLoadPhase()', () => {
         );
         assert.equal(clickAttempts, 1);
     });
+
+    it('stops immediately when the signal is already aborted, without clicking', async ({
+        assert,
+    }) => {
+        let clicked = false;
+        const seeMoreButton = createFakeLocator({
+            isVisible: () => true,
+            click: () => {
+                clicked = true;
+            },
+        });
+        const page = createFakePage({
+            locatorsBySelector: {
+                [VIEWED_ALL_JOBS_SELECTOR]: createFakeLocator({
+                    isVisible: () => false,
+                }),
+            },
+        });
+        const controller = new AbortController();
+        controller.abort();
+
+        await clickLoadPhase(page, seeMoreButton, 10, {
+            signal: controller.signal,
+        });
+
+        assert.equal(clicked, false);
+    });
 });
