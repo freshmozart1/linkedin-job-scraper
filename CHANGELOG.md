@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented in this file.
 
+## v0.5.0
+
+### Added
+
+- `sourceJobIdMismatch: boolean` on `JobResult` (`JobResultBase`), and the exported pure predicate `isSourceJobIdMismatch`. Closes a blind spot in `companyMismatch`: LinkedIn's detail pane sometimes doesn't re-render after jobs are clicked in quick succession, and when the leftover pane belongs to an *earlier posting at the same company*, the company text still matches, so `companyMismatch` never flagged it — even though `descriptionText`/`tags` could still belong to that earlier posting (GitHub issue #17). Verified live that the detail pane's own title-link href (`DETAIL_TITLE_LINK_SELECTOR`, also reused by `waitForJobDetailToLoad`) carries the ID of whichever job is actually rendered, independent of company text; `isSourceJobIdMismatch` compares that against `sourceJobId` via the existing `normalizeJobUrl`/`jobIdFromUrl` pipeline. `isStaleResult` now also ORs in this flag.
+
 ## v0.4.10
 
 ### Fixed
