@@ -6,6 +6,7 @@ import { createCompanyLookup } from '../companyLookup';
 import type { ScrapeContext } from './scrapeContext';
 import { clearBlockingOverlays } from './clearBlockingOverlays';
 import { loadAllJobs } from './loadAllJobs';
+import { clampTotalJobs } from './clampTotalJobs';
 import { scrapeAllJobsOnce } from './scrapeAllJobsOnce';
 import { retryStaleJobs } from './retryStaleJobs';
 import { ScrapeAbortedError } from './ScrapeAbortedError';
@@ -57,7 +58,7 @@ export const runScrape: RunScraper = async ({
             pollIntervalMs: scraperOptions?.overlayClear?.pollIntervalMs ?? 300,
         });
 
-        const totalJobs = await loadAllJobs(
+        const discoveredJobs = await loadAllJobs(
             page,
             scraperOptions,
             onProgress,
@@ -65,6 +66,7 @@ export const runScrape: RunScraper = async ({
         );
         if (signal?.aborted)
             throw new ScrapeAbortedError({ results, url: searchUrl });
+        const totalJobs = clampTotalJobs(discoveredJobs, scraperOptions?.maxJobs);
         onProgress?.({ type: 'jobs:found', total: totalJobs });
 
         const ctx: ScrapeContext = {

@@ -22,7 +22,7 @@ export async function scrapeSingleJob(
             isVisible: () => false,
         }),
     });
-    return scrapeJob(page, 0, 1, {
+    return scrapeJob(page, 0, {
         seenSourceJobIds: new Map(),
         runTimestamp: 123,
         companyLookup: companyLookup ?? stubCompanyLookup(),

@@ -282,6 +282,15 @@ export interface ScraperOptions {
     stableScrollsToStop?: number;
     maxSeeMoreClicks?: number;
     stableClicksToStop?: number;
+    /**
+     * Caps how many of the loaded jobs are actually *scraped*; `undefined`
+     * (the default) scrapes every job the search finds. The load/discovery
+     * phase (scroll + "See more") is unaffected and always runs to
+     * completion first — only the scrape loop afterward stops early. See
+     * `clampTotalJobs`, applied once in `runScrape`. `0` or a negative value
+     * scrapes none rather than throwing.
+     */
+    maxJobs?: number;
     delayBetweenJobsMs?: number;
     clickRetryAttempts?: number;
     overlayClear?: {

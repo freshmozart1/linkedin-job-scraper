@@ -37,7 +37,7 @@ Only `keywords` is required. Everything else (`location`, `geoId`, `datePosted`,
 
 ## `ScraperOptions`
 
-Every engine tuning constant (browser `headless`/`viewport`, scroll/click retry limits, inter-job delay, overlay-clear timing) is optional and defaults to this package's own historically-working values — nothing is hardcoded inside the engine.
+Every engine tuning constant (browser `headless`/`viewport`, scroll/click retry limits, inter-job delay, overlay-clear timing) is optional and defaults to this package's own historically-working values — nothing is hardcoded inside the engine. `maxJobs` caps how many of the loaded jobs actually get *scraped* — the load/discovery phase (scroll + "See more") always runs to completion first and is unaffected; only the scrape loop afterward stops early. Omitted (the default) scrapes every job found.
 
 `companyLookup` groups the settings for the company-address pass:
 
@@ -63,7 +63,7 @@ interface ScrapeOutcome {
 }
 ```
 
-`results` holds one entry per job card found on the search, ordered by list position — `results[i].index === i`. Nothing is filtered out: duplicates and failed scrapes (including a list item with no `<h3>`, which isn't a real job card) all keep their slot, and a stale job that was retried appears once, at its own index, holding the retry's result.
+`results` holds one entry per job actually scraped, ordered by list position — `results[i].index === i`. That's the full search count, or `scraperOptions.maxJobs` when it's set and smaller. Nothing is filtered out: duplicates and failed scrapes (including a list item with no `<h3>`, which isn't a real job card) all keep their slot, and a stale job that was retried appears once, at its own index, holding the retry's result.
 
 ```ts
 interface JobResultBase {
@@ -190,8 +190,8 @@ type ScrapeProgressEvent =
   | { type: 'job:stale'; result: JobResult };
 ```
 
-- `jobs:loading` — the unique job count changed during the scroll/click loading phase (in practice, grew). `count` is the number of distinct posting IDs currently in the list, not a delta; it fires several times per run, and not at all if loading never makes progress.
-- `jobs:found` — loading finished; `total` is the number of jobs about to be scraped and is final for the run.
+- `jobs:loading` — the unique job count changed during the scroll/click loading phase (in practice, grew). `count` is the number of distinct posting IDs currently in the list, not a delta; it fires several times per run, and not at all if loading never makes progress. Not capped by `maxJobs` — loading always discovers the full search before scraping starts, so `count` here can exceed the `total` reported next.
+- `jobs:found` — loading finished; `total` is the number of jobs about to be scraped and is final for the run. Reflects `scraperOptions.maxJobs` when set.
 - `job:start` — about to scrape the job at `index` (0-based) out of `total`.
 - `job:done` — a job finished scraping and the result looks trustworthy. This is also the event a `status: 'failed'` job emits — check `result.status`, don't assume done means scraped.
 - `job:stale` — a job finished scraping but `isStaleResult(result)` is true: the scrape succeeded, yet the detail-pane company disagreed with the list, the detail pane's own job ID disagreed with the clicked job's, or a sign-in overlay was still visible when the data was read. Emitted *instead of* `job:done` for that job, never both.

@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented in this file.
 
+## v0.7.0
+
+### Added
+
+- `ScraperOptions.maxJobs?: number` and the exported pure helper `clampTotalJobs` — caps how many of the loaded jobs are actually scraped per run (GitHub issue #21). The load/discovery phase (scroll + "See more") is unaffected and always runs to completion; only the scrape loop stops early. Applied once in `runScrape`, to the count `loadAllJobs` returns, so it propagates through `ScrapeContext.totalJobs` into `scrapeAllJobsOnce`'s loop bound and every progress event's `total` without touching any other layer.
+
+### Changed
+
+- `scrapeJob()` no longer takes a `total: number` parameter — it was always unused (the dead code that originally surfaced the gap `maxJobs` fills). Its signature is now `scrapeJob(page, index, options)`. Breaking for any direct caller of the exported `scrapeJob`.
+
 ## v0.6.0
 
 ### Added
