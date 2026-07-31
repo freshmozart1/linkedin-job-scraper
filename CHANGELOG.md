@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented in this file.
 
+## v0.4.10
+
+### Fixed
+
+- `postedAt` scraping no longer fails for jobs posted within the last few hours. `LIST_POSTED_AT_SELECTOR` was hardcoded to `time.job-search-card__listdate`, but LinkedIn renders `time.job-search-card__listdate--new` on the posting-date element for very recently posted jobs instead — confirmed live where both classes coexist on the same search results page (older postings under the plain class, recent ones under `--new`). The missed variant made `readJobListIdentity` throw `"No posted date found for list item"` for every recent posting, failing those jobs outright while older postings on the same page scraped fine. `LIST_POSTED_AT_SELECTOR` now matches both classes.
+
 ## v0.4.9
 
 ### Added

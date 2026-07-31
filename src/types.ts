@@ -119,9 +119,12 @@ export interface SuccessfulJobResult extends JobResultBase {
      */
     location: string;
     /**
-     * The list card's posting date, read from `time.job-search-card__listdate`'s
-     * `datetime` attribute (e.g. `'2026-07-21'`) rather than the relative
-     * display text ("5 days ago"), which goes stale as soon as it's stored.
+     * The list card's posting date, read from the posting-date `<time>`
+     * element's `datetime` attribute (e.g. `'2026-07-21'`) rather than the
+     * relative display text ("5 days ago"), which goes stale as soon as
+     * it's stored. LinkedIn renders this element under either
+     * `job-search-card__listdate` or, for very recently posted jobs,
+     * `job-search-card__listdate--new` (see `LIST_POSTED_AT_SELECTOR`).
      * Read at the same point as `sourceUrl`, so it survives a later
      * click/detail-pane failure. `scrapeJob` throws if the card carries no
      * usable element.

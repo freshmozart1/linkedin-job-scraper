@@ -20,8 +20,17 @@ export const JOB_LINK_SELECTOR = '.base-card__full-link';
 export const LIST_COMPANY_LINK_SELECTOR = 'h4.base-search-card__subtitle a';
 /** The list card's single location span. Exactly one per job card. */
 export const LIST_LOCATION_SELECTOR = 'span.job-search-card__location';
-/** The list card's posting-date `<time>` element; its `datetime` attribute (not the relative display text) is what's read. */
-export const LIST_POSTED_AT_SELECTOR = 'time.job-search-card__listdate';
+/**
+ * The list card's posting-date `<time>` element; its `datetime` attribute
+ * (not the relative display text) is what's read. LinkedIn renders a
+ * `--new` class variant on this element for very recently posted jobs
+ * (confirmed live: every job on an `f_TPR=r86400` search carries only
+ * `job-search-card__listdate--new`, while older/newer postings coexist on
+ * a mixed-age page under either class) — match both so recent postings
+ * don't fail with "No posted date found for list item" (GitHub issue #15).
+ */
+export const LIST_POSTED_AT_SELECTOR =
+    'time.job-search-card__listdate, time.job-search-card__listdate--new';
 
 // Job detail pane ("job criteria" / tags).
 /** Each value span inside the detail pane's job-criteria list (seniority level, employment type, job function, industries). Labels are not scraped, only values. */
