@@ -69,18 +69,8 @@ export const runScrape: RunScraper = async ({
 
         return { results, url: searchUrl };
     } finally {
-        // Debug-only escape hatch; only applies to headed runs (see ScraperOptions).
-        const closeAfterScrape =
-            scraperOptions?.headless === false
-                ? scraperOptions?._closeBrowserAfterScrape
-                : undefined;
-
         // Optional-chained: setup can now throw before the lookup exists.
-        if (closeAfterScrape?.companyPage ?? true) {
-            await companyLookup?.close().catch(() => {});
-        }
-        if (closeAfterScrape?.jobList ?? true) {
-            await browser.close();
-        }
+        await companyLookup?.close().catch(() => {});
+        await browser.close();
     }
 };
