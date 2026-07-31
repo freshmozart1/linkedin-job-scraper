@@ -279,6 +279,18 @@ export interface ScraperOptions {
         /** Optional cap on addresses kept per company (some publish 100+). The list is primary-first, so any cap of 1 or more keeps the primary. */
         maxAddressesPerCompany?: number;
     };
+    /**
+     * **Internal debugging option — not for regular consumers.** Lets someone
+     * debugging the built package leave the job-list browser (`jobList`) and/or
+     * the company-page lookup's own context (`companyPage`) open after
+     * `runScrape` finishes, instead of being closed as usual. Only takes effect
+     * when `headless: false` is also set — there's no window to inspect on a
+     * headless run, so it's ignored there and that case always closes normally.
+     */
+    _closeBrowserAfterScrape?: {
+        jobList?: boolean;
+        companyPage?: boolean;
+    };
 }
 
 export interface RunScrapeOptions {
