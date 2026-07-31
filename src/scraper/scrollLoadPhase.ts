@@ -9,6 +9,7 @@ export interface ScrollLoadPhaseOptions {
     maxScrollAttempts?: number;
     stableScrollsToStop?: number;
     onProgress?: (event: ScrapeProgressEvent) => void;
+    signal?: AbortSignal;
 }
 
 // Phase A: LinkedIn's own scroll-triggered infinite scroll, which loads jobs
@@ -35,7 +36,7 @@ export interface ScrollLoadPhaseOptions {
 //
 // CRAP score here is driven by fallow's *estimated* (not instrumented)
 // coverage defaulting to 0% for this function, not an actual
-// untested-complexity risk — verified via `fallow check_health`; the 5
+// untested-complexity risk — verified via `fallow check_health`; the
 // scrollLoadPhase tests in test/scrollLoadPhase.test.ts already exercise
 // every branch below.
 // fallow-ignore-next-line complexity
@@ -48,6 +49,7 @@ export async function scrollLoadPhase(
         maxScrollAttempts = 60,
         stableScrollsToStop = 3,
         onProgress,
+        signal,
     } = options;
     let previousUniqueCount = 0;
     let stableReads = 0;
@@ -56,6 +58,7 @@ export async function scrollLoadPhase(
     await hidePageSectionsAboveJobList(page);
 
     for (let attempt = 0; attempt < maxScrollAttempts; attempt++) {
+        if (signal?.aborted) break;
         const currentUniqueCount = (await collectJobIds(page)).size;
 
         if (currentUniqueCount === previousUniqueCount) {

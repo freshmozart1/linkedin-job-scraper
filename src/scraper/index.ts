@@ -12,6 +12,7 @@
 // exported subset below is what the tests drive directly (see CLAUDE.md).
 
 export { runScrape } from './runScrape';
+export { ScrapeAbortedError } from './ScrapeAbortedError';
 export { scrapeJob } from './scrapeJob';
 export { scrapeAllJobsOnce } from './scrapeAllJobsOnce';
 export { clearBlockingOverlays } from './clearBlockingOverlays';

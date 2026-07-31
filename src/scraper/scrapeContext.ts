@@ -11,4 +11,5 @@ export interface ScrapeContext {
     delayBetweenJobsMs?: number;
     clickRetryAttempts?: number;
     companyLookup: CompanyLookup;
+    signal?: AbortSignal;
 }

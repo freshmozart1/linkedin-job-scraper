@@ -338,4 +338,64 @@ describe('scrapeAllJobsOnce()', () => {
         assert.match(middle.error, /click intercepted by another overlay/);
         assert.equal(results[2]?.status, 'success');
     });
+
+    it('stops scraping remaining jobs once the signal is aborted mid-run', async ({
+        assert,
+    }) => {
+        const jobLocators = [
+            createFakeJobLocator({
+                title: 'Frontend Developer',
+                listCompany: 'Acme',
+                sourceJobId: '111',
+                sourceUrl:
+                    'https://www.linkedin.com/jobs/view/frontend-developer-at-acme-111',
+                companyUrl: 'https://de.linkedin.com/company/acme',
+                location: 'Hamburg',
+                postedAt: '2026-07-21',
+            }),
+            createFakeJobLocator({
+                title: 'Backend Developer',
+                listCompany: 'Acme',
+                sourceJobId: '222',
+                sourceUrl:
+                    'https://www.linkedin.com/jobs/view/backend-developer-at-acme-222',
+                companyUrl: 'https://de.linkedin.com/company/acme',
+                location: 'Hamburg',
+                postedAt: '2026-07-21',
+            }),
+        ];
+        const page = createFakePage({
+            locatorsBySelector: {
+                [JOB_LIST_SELECTOR]: createFakeLocator({
+                    nth: (index) => jobLocators[index]!,
+                }),
+                ...baseScrapeJobLocators(() => 'Acme'),
+            },
+            defaultLocator: createFakeLocator({
+                waitFor: () => {},
+                isVisible: () => false,
+            }),
+        });
+        const results: JobResult[] = [];
+        const controller = new AbortController();
+
+        await scrapeAllJobsOnce(
+            {
+                page,
+                totalJobs: 2,
+                seenSourceJobIds: new Map(),
+                runTimestamp: 123,
+                delayBetweenJobsMs: 0,
+                companyLookup: stubCompanyLookup(),
+                signal: controller.signal,
+                // Abort as soon as the first job finishes — the in-flight job
+                // still completes normally, only the next one is skipped.
+                onProgress: () => controller.abort(),
+            },
+            results,
+        );
+
+        assert.equal(results.length, 1);
+        assert.equal(results[0]?.index, 0);
+    });
 });

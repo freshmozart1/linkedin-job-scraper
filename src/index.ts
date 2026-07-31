@@ -16,6 +16,7 @@ export { createCompanyLookup } from './companyLookup';
 export type { CompanyLookup, CompanyLookupOptions } from './companyLookup';
 export {
     runScrape,
+    ScrapeAbortedError,
     scrapeJob,
     scrapeAllJobsOnce,
     clearBlockingOverlays,

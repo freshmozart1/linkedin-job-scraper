@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented in this file.
 
+## v0.6.0
+
+### Added
+
+- `RunScrapeOptions.signal?: AbortSignal` lets a caller cancel an in-progress `runScrape()` run. Aborting stops the scrape at the next safe checkpoint — between jobs in `scrapeAllJobsOnce`/`retryStaleJobs`, or during the job-loading `scrollLoadPhase`/`clickLoadPhase`/`pollForNewJobs` polling loops — never mid-job. The run always closes the browser via `runScrape`'s existing `finally` block first, then rejects with the new exported `ScrapeAbortedError` instead of resolving. `error.name === 'AbortError'` (the same convention `fetch` uses) distinguishes a cancelled run from any other failure, and `error.partial: ScrapeOutcome` carries whatever `results`/`url` had already been collected at that checkpoint (`results` is `[]` if the signal was already aborted before the run started or during job loading). Closes GitHub issue #19.
+
 ## v0.5.0
 
 ### Added
