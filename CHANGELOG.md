@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented in this file.
 
+## v0.7.1
+
+### Changed
+
+- `README.md` restructured for readability (GitHub issue #23): added a "Contents" table of contents, and split the dense `JobResult` "Field notes" bullet list — where each field's type shape, nullability rules, and edge cases were packed into a single 80–200+ word bullet — into a `### Field reference` subsection with one `####` heading per field. Documentation only; no behavior, code, or public API changed.
+
 ## v0.7.0
 
 ### Added
