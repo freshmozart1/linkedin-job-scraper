@@ -8,6 +8,7 @@ import {
     type JobListIdentity,
 } from './readJobListIdentity';
 import { registerJobOccurrence } from './registerJobOccurrence';
+import { buildSkippedResult } from './buildSkippedResult';
 import { sleep } from './sleep';
 import { clickWithOverlayRetries } from './clickWithOverlayRetries';
 import { dismissOverlayAfterClick } from './dismissOverlayAfterClick';
@@ -79,36 +80,11 @@ export async function scrapeJob(
         };
 
         if (options.shouldScrapeJob && !options.shouldScrapeJob(cardIdentity)) {
-            // Not registered via registerJobOccurrence — a skipped job never
-            // becomes the map's "first occurrence" for later duplicates to
-            // point at (see the skip-branch test coverage). But if an
-            // *earlier* list index already registered this sourceJobId (this
-            // posting was scraped in full elsewhere in the run before this
-            // occurrence was filtered out), that's a real duplicate and
-            // duplicateOfIdx must say so — not doing so would violate the
-            // field's own contract ("index of the earlier job in this run
-            // with the same posting ID; null when not a duplicate"). Guarded
-            // against self-reference the same way registerJobOccurrence is,
-            // in case this exact index was already registered on an earlier
-            // pass (a stale retry re-evaluating shouldScrapeJob for itself).
-            const firstSeenIndex = options.seenSourceJobIds.get(sourceJobId);
-            return {
+            return buildSkippedResult(
                 index,
-                status: 'skipped',
-                ...cardIdentity,
-                company: null,
-                descriptionText: null,
-                companyMismatch: false,
-                sourceJobIdMismatch: false,
-                lateOverlayDetected: false,
-                scrapedAt: new Date().toISOString(),
-                duplicateOfIdx:
-                    firstSeenIndex === undefined || firstSeenIndex === index
-                        ? null
-                        : firstSeenIndex,
-                companyAddresses: null,
-                tags: null,
-            };
+                cardIdentity,
+                options.seenSourceJobIds,
+            );
         }
 
         // Duplicates (repeated pages from LinkedIn's list-loading pagination) are
