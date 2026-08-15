@@ -718,4 +718,225 @@ describe('scrapeJob()', () => {
         assert.equal(result.status, 'success');
         assert.deepEqual(result.tags, ['Full-time']);
     });
+
+    describe('shouldScrapeJob', () => {
+        it('returns a skipped result with the list-card identity when shouldScrapeJob returns false', async ({
+            assert,
+        }) => {
+            const jobItem = createFakeJobLocator({
+                title: 'Frontend Developer',
+                listCompany: 'Acme',
+                sourceJobId: '111',
+                sourceUrl:
+                    'https://de.linkedin.com/jobs/view/frontend-developer-at-acme-111',
+                location: 'Berlin, Berlin, Germany',
+                postedAt: '2026-07-21',
+                companyUrl: 'https://de.linkedin.com/company/acme',
+            });
+            const page = createFakePage({
+                locatorsBySelector: {
+                    [JOB_LIST_SELECTOR]: createFakeLocator({
+                        nth: () => jobItem,
+                    }),
+                    ...baseScrapeJobLocators(() => 'Acme'),
+                },
+                defaultLocator: createFakeLocator({
+                    waitFor: () => {},
+                    isVisible: () => false,
+                }),
+            });
+
+            const result = await scrapeJob(page, 0, {
+                seenSourceJobIds: new Map(),
+                runTimestamp: 123,
+                companyLookup: stubCompanyLookup(),
+                shouldScrapeJob: () => false,
+            });
+
+            assert.equal(result.status, 'skipped');
+            assert.equal(result.title, 'Frontend Developer');
+            assert.equal(result.sourceJobId, '111');
+            assert.equal(
+                result.sourceUrl,
+                'https://de.linkedin.com/jobs/view/frontend-developer-at-acme-111',
+            );
+            assert.equal(result.sourceHostname, 'de.linkedin.com');
+            assert.equal(
+                result.companyUrl,
+                'https://de.linkedin.com/company/acme',
+            );
+            assert.equal(result.location, 'Berlin, Berlin, Germany');
+            assert.equal(result.postedAt, '2026-07-21');
+            assert.equal(result.company, null);
+            assert.equal(result.descriptionText, null);
+            assert.equal(result.companyAddresses, null);
+            assert.equal(result.tags, null);
+            assert.equal(result.duplicateOfIdx, null);
+        });
+
+        it('never clicks the job card when shouldScrapeJob returns false', async ({
+            assert,
+        }) => {
+            const clicks: number[] = [];
+            const jobItem = createFakeJobLocator({
+                title: 'Frontend Developer',
+                listCompany: 'Acme',
+                sourceJobId: '111',
+                sourceUrl:
+                    'https://de.linkedin.com/jobs/view/frontend-developer-at-acme-111',
+                location: 'Berlin, Berlin, Germany',
+                postedAt: '2026-07-21',
+                companyUrl: 'https://de.linkedin.com/company/acme',
+                onClick: () => {
+                    clicks.push(1);
+                },
+            });
+            const page = createFakePage({
+                locatorsBySelector: {
+                    [JOB_LIST_SELECTOR]: createFakeLocator({
+                        nth: () => jobItem,
+                    }),
+                    ...baseScrapeJobLocators(() => 'Acme'),
+                },
+                defaultLocator: createFakeLocator({
+                    waitFor: () => {},
+                    isVisible: () => false,
+                }),
+            });
+
+            await scrapeJob(page, 0, {
+                seenSourceJobIds: new Map(),
+                runTimestamp: 123,
+                companyLookup: stubCompanyLookup(),
+                shouldScrapeJob: () => false,
+            });
+
+            assert.deepEqual(clicks, []);
+        });
+
+        it('invokes shouldScrapeJob with exactly the 7 list-level identity fields', async ({
+            assert,
+        }) => {
+            const jobItem = createFakeJobLocator({
+                title: 'Frontend Developer',
+                listCompany: 'Acme',
+                sourceJobId: '111',
+                sourceUrl:
+                    'https://de.linkedin.com/jobs/view/frontend-developer-at-acme-111',
+                location: 'Berlin, Berlin, Germany',
+                postedAt: '2026-07-21',
+                companyUrl: 'https://de.linkedin.com/company/acme',
+            });
+            const page = createFakePage({
+                locatorsBySelector: {
+                    [JOB_LIST_SELECTOR]: createFakeLocator({
+                        nth: () => jobItem,
+                    }),
+                    ...baseScrapeJobLocators(() => 'Acme'),
+                },
+                defaultLocator: createFakeLocator({
+                    waitFor: () => {},
+                    isVisible: () => false,
+                }),
+            });
+            let receivedIdentity: unknown = null;
+
+            await scrapeJob(page, 0, {
+                seenSourceJobIds: new Map(),
+                runTimestamp: 123,
+                companyLookup: stubCompanyLookup(),
+                shouldScrapeJob: (identity) => {
+                    receivedIdentity = identity;
+                    return true;
+                },
+            });
+
+            assert.deepEqual(receivedIdentity, {
+                title: 'Frontend Developer',
+                sourceUrl:
+                    'https://de.linkedin.com/jobs/view/frontend-developer-at-acme-111',
+                sourceHostname: 'de.linkedin.com',
+                sourceJobId: '111',
+                companyUrl: 'https://de.linkedin.com/company/acme',
+                location: 'Berlin, Berlin, Germany',
+                postedAt: '2026-07-21',
+            });
+        });
+
+        it('still fully scrapes the job to status success when shouldScrapeJob returns true', async ({
+            assert,
+        }) => {
+            const jobItem = createFakeJobLocator({
+                title: 'Frontend Developer',
+                listCompany: 'Acme',
+                sourceJobId: '111',
+                sourceUrl:
+                    'https://de.linkedin.com/jobs/view/frontend-developer-at-acme-111',
+                location: 'Berlin, Berlin, Germany',
+                postedAt: '2026-07-21',
+                companyUrl: 'https://de.linkedin.com/company/acme',
+            });
+            const page = createFakePage({
+                locatorsBySelector: {
+                    [JOB_LIST_SELECTOR]: createFakeLocator({
+                        nth: () => jobItem,
+                    }),
+                    ...baseScrapeJobLocators(() => 'Acme'),
+                },
+                defaultLocator: createFakeLocator({
+                    waitFor: () => {},
+                    isVisible: () => false,
+                }),
+            });
+
+            const result = await scrapeJob(page, 0, {
+                seenSourceJobIds: new Map(),
+                runTimestamp: 123,
+                companyLookup: stubCompanyLookup(),
+                shouldScrapeJob: () => true,
+            });
+
+            assert.equal(result.status, 'success');
+            assert.equal(result.title, 'Frontend Developer');
+            assert.equal(result.company, 'Acme');
+            assert.equal(result.descriptionText, 'A description.');
+        });
+
+        it('does not register a skipped job in seenSourceJobIds', async ({
+            assert,
+        }) => {
+            const jobItem = createFakeJobLocator({
+                title: 'Frontend Developer',
+                listCompany: 'Acme',
+                sourceJobId: '111',
+                sourceUrl:
+                    'https://de.linkedin.com/jobs/view/frontend-developer-at-acme-111',
+                location: 'Berlin, Berlin, Germany',
+                postedAt: '2026-07-21',
+                companyUrl: 'https://de.linkedin.com/company/acme',
+            });
+            const page = createFakePage({
+                locatorsBySelector: {
+                    [JOB_LIST_SELECTOR]: createFakeLocator({
+                        nth: () => jobItem,
+                    }),
+                    ...baseScrapeJobLocators(() => 'Acme'),
+                },
+                defaultLocator: createFakeLocator({
+                    waitFor: () => {},
+                    isVisible: () => false,
+                }),
+            });
+            const seenSourceJobIds = new Map<string, number>();
+
+            await scrapeJob(page, 0, {
+                seenSourceJobIds,
+                runTimestamp: 123,
+                companyLookup: stubCompanyLookup(),
+                shouldScrapeJob: () => false,
+            });
+
+            assert.equal(seenSourceJobIds.size, 0);
+        });
+    });
 });

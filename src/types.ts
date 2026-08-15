@@ -1,4 +1,4 @@
-export type JobStatus = 'success' | 'failed';
+export type JobStatus = 'success' | 'failed' | 'skipped';
 
 /**
  * One office address published in the "Locations" section of a company's
@@ -27,6 +27,23 @@ export interface RawCompanyLocation {
     isPrimary: boolean;
     /** The `<p>` texts in DOM order; the last one is always the locality line. */
     lines: string[];
+}
+
+/**
+ * The list-level identity of a job card, read off it by `readJobListIdentity`
+ * before the card is ever clicked. Passed to `ScraperOptions.shouldScrapeJob`
+ * so a consumer can decide whether a job is worth the full detail scrape
+ * using only what's visible in the search results list — title, company,
+ * location, posted date — without paying for the click-through.
+ */
+export interface JobCardIdentity {
+    title: string;
+    sourceUrl: string;
+    sourceHostname: string;
+    sourceJobId: string;
+    companyUrl: string;
+    location: string;
+    postedAt: string;
 }
 
 /**
@@ -177,8 +194,31 @@ export interface FailedJobResult extends JobResultBase {
     tags: null;
 }
 
+/**
+ * A job card whose full detail scrape never ran because `shouldScrapeJob`
+ * returned `false` for it. Every field below is exactly what
+ * `readJobListIdentity` read off the card before the callback was
+ * consulted — nothing from the detail pane or the company lookup was ever
+ * read, since the card was never clicked. `company`/`descriptionText`/
+ * `companyAddresses`/`tags` are always `null` for the same reason.
+ */
+export interface SkippedJobResult extends JobResultBase {
+    status: 'skipped';
+    title: string;
+    company: null;
+    descriptionText: null;
+    sourceJobId: string;
+    sourceUrl: string;
+    sourceHostname: string;
+    companyUrl: string;
+    companyAddresses: null;
+    location: string;
+    postedAt: string;
+    tags: null;
+}
+
 /** One scraped job card, as produced by the scraper (camelCase). */
-export type JobResult = SuccessfulJobResult | FailedJobResult;
+export type JobResult = SuccessfulJobResult | FailedJobResult | SkippedJobResult;
 
 export interface JobsLoadingEvent {
     type: 'jobs:loading';
@@ -291,6 +331,15 @@ export interface ScraperOptions {
      * scrapes none rather than throwing.
      */
     maxJobs?: number;
+    /**
+     * Called once per job card with its list-level identity (see
+     * `JobCardIdentity`), right after `readJobListIdentity` succeeds and
+     * before the card is clicked. Returning `false` skips that job's full
+     * detail scrape entirely — no click, no company lookup — and records a
+     * `status: 'skipped'` result at that index instead. Omitted, every job
+     * is scraped as before.
+     */
+    shouldScrapeJob?: (identity: JobCardIdentity) => boolean;
     delayBetweenJobsMs?: number;
     clickRetryAttempts?: number;
     overlayClear?: {

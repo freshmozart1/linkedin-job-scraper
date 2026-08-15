@@ -16,6 +16,7 @@ export async function scrapeJobAndRecord(
         runTimestamp: ctx.runTimestamp,
         clickRetryAttempts: ctx.clickRetryAttempts,
         companyLookup: ctx.companyLookup,
+        shouldScrapeJob: ctx.shouldScrapeJob,
     });
     results[index] = result; // indexed write (not push) so a retry replaces, not appends
     ctx.onProgress?.(

@@ -79,6 +79,7 @@ export const runScrape: RunScraper = async ({
             clickRetryAttempts: scraperOptions?.clickRetryAttempts,
             companyLookup,
             signal,
+            shouldScrapeJob: scraperOptions?.shouldScrapeJob,
         };
 
         const staleIndices = await scrapeAllJobsOnce(ctx, results);
