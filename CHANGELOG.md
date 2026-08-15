@@ -9,6 +9,10 @@ All notable changes to this project are documented in this file.
 - `ScraperOptions.shouldScrapeJob?: (identity: JobCardIdentity) => boolean` — a pre-click filter, called with a job card's list-level identity (`title`, `sourceUrl`, `sourceHostname`, `sourceJobId`, `companyUrl`, `location`, `postedAt`) right after it's read off the card and before the card is clicked (closes GitHub issue #25). Returning `false` skips that job's full detail scrape entirely — no click, no company lookup — and records a new `status: 'skipped'` `JobResult` at that index instead; `JobResult` is now a union of `SuccessfulJobResult`, `FailedJobResult`, and the new `SkippedJobResult`. Omitted, every job is scraped as before. Must be synchronous: the return value is checked directly (`!shouldScrapeJob(identity)`), so an `async` predicate's `Promise` is always truthy and the skip branch would never fire.
 - A skipped job is not registered in the run's duplicate-tracking map, so it never becomes a later duplicate's "first occurrence" — but a skipped result still reports `duplicateOfIdx` against an earlier index that already scraped the same posting, if one exists, rather than always reporting `null`.
 
+### Changed
+
+- The skip-branch's result-assembly logic (building the `'skipped'` `JobResult`, including the `duplicateOfIdx` self-reference guard) is split out of `scrapeJob.ts` into its own `buildSkippedResult.ts`, per `src/scraper/`'s one-function-per-file convention. No public API or behavior change — `buildSkippedResult` is not re-exported from `scraper/index.ts`.
+
 ## v0.7.1
 
 ### Changed
