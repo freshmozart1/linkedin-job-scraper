@@ -1,5 +1,5 @@
 import type { Page } from 'playwright';
-import type { JobResult } from '../types';
+import type { JobCardIdentity, JobResult, ShouldScrapeJob } from '../types';
 import type { CompanyLookup } from '../companyLookup';
 import { JOB_CRITERIA_VALUE_SELECTOR } from '../selectors';
 import { jobItemsLocator } from './jobItemsLocator';
@@ -8,6 +8,7 @@ import {
     type JobListIdentity,
 } from './readJobListIdentity';
 import { registerJobOccurrence } from './registerJobOccurrence';
+import { buildSkippedResult } from './buildSkippedResult';
 import { sleep } from './sleep';
 import { clickWithOverlayRetries } from './clickWithOverlayRetries';
 import { dismissOverlayAfterClick } from './dismissOverlayAfterClick';
@@ -21,6 +22,7 @@ export interface ScrapeJobOptions {
     runTimestamp: number;
     clickRetryAttempts?: number;
     companyLookup: CompanyLookup;
+    shouldScrapeJob?: ShouldScrapeJob;
 }
 
 export async function scrapeJob(
@@ -66,6 +68,25 @@ export async function scrapeJob(
         const companyUrl = identity.companyUrl as string;
         const location = identity.location as string;
         const postedAt = identity.postedAt as string;
+
+        const cardIdentity: JobCardIdentity = {
+            title,
+            sourceUrl,
+            sourceHostname,
+            sourceJobId,
+            companyUrl,
+            location,
+            postedAt,
+        };
+
+        if (options.shouldScrapeJob && !options.shouldScrapeJob(cardIdentity)) {
+            return buildSkippedResult(
+                index,
+                cardIdentity,
+                options.seenSourceJobIds,
+            );
+        }
+
         // Duplicates (repeated pages from LinkedIn's list-loading pagination) are
         // scraped in full like any other job — they're only marked, so the
         // caller can hide or show them.

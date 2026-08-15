@@ -53,6 +53,18 @@ Only `keywords` is required. Everything else (`location`, `geoId`, `datePosted`,
 
 Every engine tuning constant (browser `headless`/`viewport`, scroll/click retry limits, inter-job delay, overlay-clear timing) is optional and defaults to this package's own historically-working values — nothing is hardcoded inside the engine. `maxJobs` caps how many of the loaded jobs actually get *scraped* — the load/discovery phase (scroll + "See more") always runs to completion first and is unaffected; only the scrape loop afterward stops early. Omitted (the default) scrapes every job found.
 
+`shouldScrapeJob(identity)` is a pre-click filter: called with a job card's list-level identity — `title`, `sourceUrl`, `sourceHostname`, `sourceJobId`, `companyUrl`, `location`, `postedAt` (see `JobCardIdentity`) — right after it's read off the card, but *before* the card is clicked. Return `false` to skip that job's full detail scrape entirely (no click, no company lookup) and record a `status: 'skipped'` result at that index instead. Omitted (the default), every job is scraped as before.
+
+```ts
+scraperOptions: {
+  shouldScrapeJob: (identity) => !identity.title.includes('Senior'),
+}
+```
+
+Must be synchronous — the return value is checked directly, so a `Promise` (from an `async` function) is always truthy and the skip branch would never fire. Resolve any async work (e.g. against your own database) before calling `runScrape`.
+
+Normally called once per job card, but a job whose first pass came back `'success'` yet stale (see the staleness flags in the field reference below) gets exactly one retry, which consults this callback again — a stateful predicate can see the same job twice with different answers across the two passes, and a retry that flips to `false` replaces the earlier `'success'` result with an empty `'skipped'` one.
+
 `companyLookup` groups the settings for the company-address pass:
 
 ```ts
@@ -77,7 +89,7 @@ interface ScrapeOutcome {
 }
 ```
 
-`results` holds one entry per job actually scraped, ordered by list position — `results[i].index === i`. That's the full search count, or `scraperOptions.maxJobs` when it's set and smaller. Nothing is filtered out: duplicates and failed scrapes (including a list item with no `<h3>`, which isn't a real job card) all keep their slot, and a stale job that was retried appears once, at its own index, holding the retry's result.
+`results` holds one entry per job the engine considered, ordered by list position — `results[i].index === i`. That's the full search count, or `scraperOptions.maxJobs` when it's set and smaller. Nothing is filtered out: duplicates, failed scrapes (including a list item with no `<h3>`, which isn't a real job card), and jobs `shouldScrapeJob` skipped without ever being clicked all keep their slot, and a stale job that was retried appears once, at its own index, holding the retry's result.
 
 ```ts
 interface JobResultBase {
@@ -124,7 +136,27 @@ interface FailedJobResult extends JobResultBase {
   tags: null;
 }
 
-type JobResult = SuccessfulJobResult | FailedJobResult;
+// A job card whose full detail scrape never ran because shouldScrapeJob
+// returned false for it. Every field inherited from JobCardIdentity below
+// is exactly what was read off the card before the callback was consulted
+// — nothing from the detail pane or the company lookup was ever read,
+// since the card was never clicked.
+interface SkippedJobResult extends JobResultBase {
+  status: 'skipped';
+  title: string;
+  company: null;
+  descriptionText: null;
+  sourceJobId: string;
+  sourceUrl: string;
+  sourceHostname: string;
+  companyUrl: string;
+  companyAddresses: null;
+  location: string;
+  postedAt: string;
+  tags: null;
+}
+
+type JobResult = SuccessfulJobResult | FailedJobResult | SkippedJobResult;
 
 interface CompanyAddress {
   streetAddress: string | null;     // street line(s) as printed, joined with ', '
@@ -140,11 +172,12 @@ Field notes worth knowing before you consume this.
 
 #### `status`
 
-`JobResult` is a union of `SuccessfulJobResult` and `FailedJobResult` with different shapes — narrow on `status` before reading anything else.
+`JobResult` is a union of `SuccessfulJobResult`, `FailedJobResult`, and `SkippedJobResult` with different shapes — narrow on `status` before reading anything else.
 
 - `'success'` means the card was clicked and the detail pane was read (that does *not* by itself mean the data is trustworthy; see the staleness flags below) — every content field is guaranteed present.
 - `'failed'` means `scrapeJob()` threw somewhere along the way; `error` (only present on this variant) carries the thrown message, and every other content field holds whatever was captured before the failure — `null` if the failure happened before that particular field was ever read.
-- `company`/`descriptionText`/`companyAddresses`/`tags` are always `null` on a failed result, since they're only read after everything else.
+- `'skipped'` means `scraperOptions.shouldScrapeJob` returned `false` for this card's list-level identity — the card was never clicked. `title`/`sourceJobId`/`sourceUrl`/`sourceHostname`/`companyUrl`/`location`/`postedAt` are exactly what was read off the list card; `error` is not present on this variant (it isn't a failure).
+- `company`/`descriptionText`/`companyAddresses`/`tags` are always `null` on a failed or skipped result, since they're only read after everything else.
 
 #### `title`
 
@@ -177,6 +210,7 @@ LinkedIn's guest pagination can re-serve an earlier page verbatim, so repeats ar
 - `null` on first (and only) occurrences; otherwise the index of the first job with the same `sourceJobId`.
 - Filter on `duplicateOfIdx === null` if you want each posting once.
 - Stays `null` whenever `sourceJobId` is `null`, since identity can't be established — including on a `'failed'` result whose failure happened before identity was read.
+- A `'skipped'` result is never itself registered as the "first occurrence" of its `sourceJobId` — a later occurrence of the same posting that *does* get scraped will not point back at a skipped one. But a skipped result still reports `duplicateOfIdx` against an *earlier* index that already scraped the same posting, if there was one.
 
 #### `companyUrl`
 

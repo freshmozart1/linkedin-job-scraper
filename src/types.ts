@@ -1,4 +1,4 @@
-export type JobStatus = 'success' | 'failed';
+export type JobStatus = 'success' | 'failed' | 'skipped';
 
 /**
  * One office address published in the "Locations" section of a company's
@@ -28,6 +28,40 @@ export interface RawCompanyLocation {
     /** The `<p>` texts in DOM order; the last one is always the locality line. */
     lines: string[];
 }
+
+/**
+ * The list-level identity of a job card, read off it by `readJobListIdentity`
+ * before the card is ever clicked. Passed to `ScraperOptions.shouldScrapeJob`
+ * so a consumer can decide whether a job is worth the full detail scrape
+ * using only what's visible in the search results list — title, company,
+ * location, posted date — without paying for the click-through.
+ */
+export interface JobCardIdentity {
+    title: string;
+    sourceUrl: string;
+    sourceHostname: string;
+    sourceJobId: string;
+    companyUrl: string;
+    location: string;
+    postedAt: string;
+}
+
+/**
+ * A pre-click filter over a job card's list-level identity; see
+ * `ScraperOptions.shouldScrapeJob`. Shared type so `ScraperOptions`,
+ * `ScrapeContext`, and `ScrapeJobOptions` all reference the same signature
+ * instead of repeating the structural literal.
+ *
+ * Must be synchronous. `!shouldScrapeJob(identity)` is checked directly
+ * against the return value — an `async` function assigned here typechecks
+ * as an error (`Promise<boolean>` isn't assignable to `boolean`), but a
+ * consumer that bypasses the type system (`as any`, a plain-JS caller of
+ * the compiled output) and passes one anyway will see the promise treated
+ * as always-truthy: the skip branch never fires, and the job is scraped as
+ * if the predicate had returned `true`. Resolve any async work before
+ * returning a plain `boolean`.
+ */
+export type ShouldScrapeJob = (identity: JobCardIdentity) => boolean;
 
 /**
  * Fields common to every scraped job card, regardless of whether the scrape
@@ -177,8 +211,25 @@ export interface FailedJobResult extends JobResultBase {
     tags: null;
 }
 
+/**
+ * A job card whose full detail scrape never ran because `shouldScrapeJob`
+ * returned `false` for it. Every field inherited from `JobCardIdentity`
+ * below is exactly what `readJobListIdentity` read off the card before the
+ * callback was consulted — nothing from the detail pane or the company
+ * lookup was ever read, since the card was never clicked.
+ * `company`/`descriptionText`/`companyAddresses`/`tags` are always `null`
+ * for the same reason.
+ */
+export interface SkippedJobResult extends JobResultBase, JobCardIdentity {
+    status: 'skipped';
+    company: null;
+    descriptionText: null;
+    companyAddresses: null;
+    tags: null;
+}
+
 /** One scraped job card, as produced by the scraper (camelCase). */
-export type JobResult = SuccessfulJobResult | FailedJobResult;
+export type JobResult = SuccessfulJobResult | FailedJobResult | SkippedJobResult;
 
 export interface JobsLoadingEvent {
     type: 'jobs:loading';
@@ -291,6 +342,23 @@ export interface ScraperOptions {
      * scrapes none rather than throwing.
      */
     maxJobs?: number;
+    /**
+     * Called with a job card's list-level identity (see `JobCardIdentity`),
+     * right after `readJobListIdentity` succeeds and before the card is
+     * clicked. Returning `false` skips that job's full detail scrape
+     * entirely — no click, no company lookup — and records a
+     * `status: 'skipped'` result at that index instead. Omitted, every job
+     * is scraped as before.
+     *
+     * Normally called once per job card, but a job whose first pass came
+     * back `'success'` yet stale (see `isStaleResult`) gets exactly one
+     * retry via `retryStaleJobs`, which re-reads the list card and consults
+     * this callback again — so a stateful predicate can see the same
+     * `sourceJobId` twice with different answers across the two passes. A
+     * retry that flips to `false` replaces the earlier `'success'` result
+     * with an empty `'skipped'` one at that index.
+     */
+    shouldScrapeJob?: ShouldScrapeJob;
     delayBetweenJobsMs?: number;
     clickRetryAttempts?: number;
     overlayClear?: {

@@ -1,6 +1,6 @@
 {
   "name": "linkedin-job-scraper",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "description": "Playwright-driven scraper for LinkedIn's public/guest job search results — no fixed search params, no login.",
   "private": true,
   "repository": {
