@@ -1,5 +1,5 @@
 import type { Page } from 'playwright';
-import type { JobCardIdentity, JobResult } from '../types';
+import type { JobCardIdentity, JobResult, ShouldScrapeJob } from '../types';
 import type { CompanyLookup } from '../companyLookup';
 import { JOB_CRITERIA_VALUE_SELECTOR } from '../selectors';
 import { jobItemsLocator } from './jobItemsLocator';
@@ -21,7 +21,7 @@ export interface ScrapeJobOptions {
     runTimestamp: number;
     clickRetryAttempts?: number;
     companyLookup: CompanyLookup;
-    shouldScrapeJob?: (identity: JobCardIdentity) => boolean;
+    shouldScrapeJob?: ShouldScrapeJob;
 }
 
 export async function scrapeJob(
@@ -68,36 +68,45 @@ export async function scrapeJob(
         const location = identity.location as string;
         const postedAt = identity.postedAt as string;
 
-        if (
-            options.shouldScrapeJob &&
-            !options.shouldScrapeJob({
-                title,
-                sourceUrl,
-                sourceHostname,
-                sourceJobId,
-                companyUrl,
-                location,
-                postedAt,
-            })
-        ) {
+        const cardIdentity: JobCardIdentity = {
+            title,
+            sourceUrl,
+            sourceHostname,
+            sourceJobId,
+            companyUrl,
+            location,
+            postedAt,
+        };
+
+        if (options.shouldScrapeJob && !options.shouldScrapeJob(cardIdentity)) {
+            // Not registered via registerJobOccurrence — a skipped job never
+            // becomes the map's "first occurrence" for later duplicates to
+            // point at (see the skip-branch test coverage). But if an
+            // *earlier* list index already registered this sourceJobId (this
+            // posting was scraped in full elsewhere in the run before this
+            // occurrence was filtered out), that's a real duplicate and
+            // duplicateOfIdx must say so — not doing so would violate the
+            // field's own contract ("index of the earlier job in this run
+            // with the same posting ID; null when not a duplicate"). Guarded
+            // against self-reference the same way registerJobOccurrence is,
+            // in case this exact index was already registered on an earlier
+            // pass (a stale retry re-evaluating shouldScrapeJob for itself).
+            const firstSeenIndex = options.seenSourceJobIds.get(sourceJobId);
             return {
                 index,
                 status: 'skipped',
-                title,
+                ...cardIdentity,
                 company: null,
                 descriptionText: null,
                 companyMismatch: false,
                 sourceJobIdMismatch: false,
                 lateOverlayDetected: false,
-                sourceJobId,
-                sourceUrl,
-                sourceHostname,
                 scrapedAt: new Date().toISOString(),
-                duplicateOfIdx: null,
-                companyUrl,
+                duplicateOfIdx:
+                    firstSeenIndex === undefined || firstSeenIndex === index
+                        ? null
+                        : firstSeenIndex,
                 companyAddresses: null,
-                location,
-                postedAt,
                 tags: null,
             };
         }

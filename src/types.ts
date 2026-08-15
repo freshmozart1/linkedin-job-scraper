@@ -47,6 +47,23 @@ export interface JobCardIdentity {
 }
 
 /**
+ * A pre-click filter over a job card's list-level identity; see
+ * `ScraperOptions.shouldScrapeJob`. Shared type so `ScraperOptions`,
+ * `ScrapeContext`, and `ScrapeJobOptions` all reference the same signature
+ * instead of repeating the structural literal.
+ *
+ * Must be synchronous. `!shouldScrapeJob(identity)` is checked directly
+ * against the return value — an `async` function assigned here typechecks
+ * as an error (`Promise<boolean>` isn't assignable to `boolean`), but a
+ * consumer that bypasses the type system (`as any`, a plain-JS caller of
+ * the compiled output) and passes one anyway will see the promise treated
+ * as always-truthy: the skip branch never fires, and the job is scraped as
+ * if the predicate had returned `true`. Resolve any async work before
+ * returning a plain `boolean`.
+ */
+export type ShouldScrapeJob = (identity: JobCardIdentity) => boolean;
+
+/**
  * Fields common to every scraped job card, regardless of whether the scrape
  * succeeded or failed partway through.
  */
@@ -196,24 +213,18 @@ export interface FailedJobResult extends JobResultBase {
 
 /**
  * A job card whose full detail scrape never ran because `shouldScrapeJob`
- * returned `false` for it. Every field below is exactly what
- * `readJobListIdentity` read off the card before the callback was
- * consulted — nothing from the detail pane or the company lookup was ever
- * read, since the card was never clicked. `company`/`descriptionText`/
- * `companyAddresses`/`tags` are always `null` for the same reason.
+ * returned `false` for it. Every field inherited from `JobCardIdentity`
+ * below is exactly what `readJobListIdentity` read off the card before the
+ * callback was consulted — nothing from the detail pane or the company
+ * lookup was ever read, since the card was never clicked.
+ * `company`/`descriptionText`/`companyAddresses`/`tags` are always `null`
+ * for the same reason.
  */
-export interface SkippedJobResult extends JobResultBase {
+export interface SkippedJobResult extends JobResultBase, JobCardIdentity {
     status: 'skipped';
-    title: string;
     company: null;
     descriptionText: null;
-    sourceJobId: string;
-    sourceUrl: string;
-    sourceHostname: string;
-    companyUrl: string;
     companyAddresses: null;
-    location: string;
-    postedAt: string;
     tags: null;
 }
 
@@ -332,14 +343,22 @@ export interface ScraperOptions {
      */
     maxJobs?: number;
     /**
-     * Called once per job card with its list-level identity (see
-     * `JobCardIdentity`), right after `readJobListIdentity` succeeds and
-     * before the card is clicked. Returning `false` skips that job's full
-     * detail scrape entirely — no click, no company lookup — and records a
+     * Called with a job card's list-level identity (see `JobCardIdentity`),
+     * right after `readJobListIdentity` succeeds and before the card is
+     * clicked. Returning `false` skips that job's full detail scrape
+     * entirely — no click, no company lookup — and records a
      * `status: 'skipped'` result at that index instead. Omitted, every job
      * is scraped as before.
+     *
+     * Normally called once per job card, but a job whose first pass came
+     * back `'success'` yet stale (see `isStaleResult`) gets exactly one
+     * retry via `retryStaleJobs`, which re-reads the list card and consults
+     * this callback again — so a stateful predicate can see the same
+     * `sourceJobId` twice with different answers across the two passes. A
+     * retry that flips to `false` replaces the earlier `'success'` result
+     * with an empty `'skipped'` one at that index.
      */
-    shouldScrapeJob?: (identity: JobCardIdentity) => boolean;
+    shouldScrapeJob?: ShouldScrapeJob;
     delayBetweenJobsMs?: number;
     clickRetryAttempts?: number;
     overlayClear?: {

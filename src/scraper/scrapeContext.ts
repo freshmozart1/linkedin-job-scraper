@@ -1,5 +1,5 @@
 import type { Page } from 'playwright';
-import type { JobCardIdentity, ScrapeProgressEvent } from '../types';
+import type { ScrapeProgressEvent, ShouldScrapeJob } from '../types';
 import type { CompanyLookup } from '../companyLookup';
 
 export interface ScrapeContext {
@@ -12,5 +12,5 @@ export interface ScrapeContext {
     clickRetryAttempts?: number;
     companyLookup: CompanyLookup;
     signal?: AbortSignal;
-    shouldScrapeJob?: (identity: JobCardIdentity) => boolean;
+    shouldScrapeJob?: ShouldScrapeJob;
 }

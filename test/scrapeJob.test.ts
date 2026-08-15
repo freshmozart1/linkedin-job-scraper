@@ -938,5 +938,92 @@ describe('scrapeJob()', () => {
 
             assert.equal(seenSourceJobIds.size, 0);
         });
+
+        it('reports duplicateOfIdx against an earlier index that already scraped the same posting, even though the skipped occurrence is never registered', async ({
+            assert,
+        }) => {
+            const jobItem = createFakeJobLocator({
+                title: 'Frontend Developer',
+                listCompany: 'Acme',
+                sourceJobId: '111',
+                sourceUrl:
+                    'https://de.linkedin.com/jobs/view/frontend-developer-at-acme-111',
+                location: 'Berlin, Berlin, Germany',
+                postedAt: '2026-07-21',
+                companyUrl: 'https://de.linkedin.com/company/acme',
+            });
+            const page = createFakePage({
+                locatorsBySelector: {
+                    [JOB_LIST_SELECTOR]: createFakeLocator({
+                        nth: () => jobItem,
+                    }),
+                    ...baseScrapeJobLocators(() => 'Acme'),
+                },
+                defaultLocator: createFakeLocator({
+                    waitFor: () => {},
+                    isVisible: () => false,
+                }),
+            });
+            // Simulates the same posting having already been fully scraped
+            // at an earlier list index (LinkedIn's list-loading pagination
+            // can repeat a posting across pages) before this later
+            // occurrence gets filtered out.
+            const seenSourceJobIds = new Map<string, number>([['111', 0]]);
+
+            const result = await scrapeJob(page, 5, {
+                seenSourceJobIds,
+                runTimestamp: 123,
+                companyLookup: stubCompanyLookup(),
+                shouldScrapeJob: () => false,
+            });
+
+            assert.equal(result.status, 'skipped');
+            assert.equal(result.duplicateOfIdx, 0);
+            // Still not registered — a skipped occurrence never becomes the
+            // map's "first occurrence" for anyone else to point at.
+            assert.equal(seenSourceJobIds.get('111'), 0);
+        });
+
+        it('reports duplicateOfIdx null, not self, when this exact index was already registered (a stale retry re-evaluating shouldScrapeJob for itself)', async ({
+            assert,
+        }) => {
+            const jobItem = createFakeJobLocator({
+                title: 'Frontend Developer',
+                listCompany: 'Acme',
+                sourceJobId: '111',
+                sourceUrl:
+                    'https://de.linkedin.com/jobs/view/frontend-developer-at-acme-111',
+                location: 'Berlin, Berlin, Germany',
+                postedAt: '2026-07-21',
+                companyUrl: 'https://de.linkedin.com/company/acme',
+            });
+            const page = createFakePage({
+                locatorsBySelector: {
+                    [JOB_LIST_SELECTOR]: createFakeLocator({
+                        nth: () => jobItem,
+                    }),
+                    ...baseScrapeJobLocators(() => 'Acme'),
+                },
+                defaultLocator: createFakeLocator({
+                    waitFor: () => {},
+                    isVisible: () => false,
+                }),
+            });
+            // This index registered itself as the first occurrence on an
+            // earlier pass (e.g. the initial scrape that was later found
+            // stale); a retry re-evaluating shouldScrapeJob for the same
+            // index must not read that back as "duplicate of myself".
+            const seenSourceJobIds = new Map<string, number>([['111', 5]]);
+
+            const result = await scrapeJob(page, 5, {
+                seenSourceJobIds,
+                runTimestamp: 123,
+                companyLookup: stubCompanyLookup(),
+                shouldScrapeJob: () => false,
+            });
+
+            assert.equal(result.status, 'skipped');
+            assert.equal(result.duplicateOfIdx, null);
+        });
     });
 });
