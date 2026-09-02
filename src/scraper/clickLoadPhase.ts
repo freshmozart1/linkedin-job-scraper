@@ -43,7 +43,12 @@ export async function clickLoadPhase(
         if (!(await seeMoreButton.isVisible().catch(() => false))) break;
 
         const beforeClickCount = previousUniqueCount;
-        await clickWithOverlayRetries(seeMoreButton, page, clickRetryAttempts);
+        await clickWithOverlayRetries(
+            seeMoreButton,
+            page,
+            clickRetryAttempts,
+            onProgress,
+        );
         const currentUniqueCount = await pollForNewJobs(
             page,
             beforeClickCount,

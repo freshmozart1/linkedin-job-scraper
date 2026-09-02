@@ -9,7 +9,6 @@ export function createFakeLocator(config: FakeLocatorConfig = {}): Locator {
         filter: () => locator,
         locator: (selector: string) =>
             config.locator ? config.locator(selector) : locator,
-        getByRole: () => locator,
         isVisible: async () => (config.isVisible ? config.isVisible() : true),
         click: async () => {
             if (config.click) await config.click();

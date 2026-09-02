@@ -7,6 +7,9 @@ import {
 import {
     JOB_LIST_SELECTOR,
     JOB_CRITERIA_VALUE_SELECTOR,
+    DESCRIPTION_SELECTOR,
+    OVERLAY_SELECTOR,
+    isStaleResult,
     scrapeJob,
 } from '../src';
 import type { CompanyAddress } from '../src';
@@ -75,6 +78,75 @@ describe('scrapeJob()', () => {
         assert.equal(result.location, 'Berlin, Berlin, Germany');
         assert.equal(result.postedAt, '2026-07-21');
         assert.deepEqual(result.tags, ['Full-time']);
+    });
+    it('flags lateOverlayDetected when a late overlay had to be neutralized', async ({
+        assert,
+    }) => {
+        // The fix for GitHub issue #27 always clears a stuck overlay now, so
+        // `stillBlocking` alone would have quietly killed this flag — and
+        // with it the one retry retryStaleJobs gives a suspect result. An
+        // overlay that had to be forced open around the data read is still a
+        // stale-result signal, which is why checkForLateOverlay counts
+        // `neutralized` too.
+        let overlayVisible = false;
+        const jobItem = createFakeJobLocator({
+            title: 'Frontend Developer',
+            listCompany: 'Acme',
+            sourceJobId: '111',
+            sourceUrl:
+                'https://de.linkedin.com/jobs/view/frontend-developer-at-acme-111',
+            location: 'Berlin, Berlin, Germany',
+            postedAt: '2026-07-21',
+            companyUrl: 'https://de.linkedin.com/company/acme',
+        });
+        const page = createFakePage({
+            locatorsBySelector: {
+                [JOB_LIST_SELECTOR]: createFakeLocator({ nth: () => jobItem }),
+                ...baseScrapeJobLocators(() => 'Acme'),
+                // Clear for the click and the post-click dismissal; the nag
+                // only renders once the description has been read, which is
+                // exactly the window checkForLateOverlay exists to cover.
+                [OVERLAY_SELECTOR]: createFakeLocator({
+                    isVisible: () => overlayVisible,
+                }),
+                [DESCRIPTION_SELECTOR]: createFakeLocator({
+                    innerText: () => {
+                        overlayVisible = true;
+                        return 'A description.';
+                    },
+                }),
+            },
+            defaultLocator: createFakeLocator({
+                waitFor: () => {},
+                isVisible: () => false,
+            }),
+            // Nothing in the overlay is safe to click and there is no
+            // keyboard, so the ladder runs all the way down to neutralizing.
+            evaluate: (arg) => {
+                const passed = (arg ?? {}) as Record<string, unknown>;
+                if ('buttonSelector' in passed)
+                    return {
+                        text: 'Sign in to view more jobs',
+                        classes: ['modal__overlay--visible'],
+                        buttonNames: ['Sign in', 'Join now'],
+                    };
+                if ('visibleClass' in passed) {
+                    overlayVisible = false;
+                    return 1;
+                }
+                return undefined;
+            },
+        });
+
+        const result = await scrapeJob(page, 0, {
+            seenSourceJobIds: new Map(),
+            runTimestamp: 123,
+            companyLookup: stubCompanyLookup(),
+        });
+
+        assert.equal(result.status, 'success');
+        assert.equal(result.lateOverlayDetected, true);
+        assert.equal(isStaleResult(result), true);
     });
     it('flags a same-company stale detail pane via sourceJobIdMismatch even though companyMismatch misses it', async ({
         assert,

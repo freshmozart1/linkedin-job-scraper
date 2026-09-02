@@ -1,4 +1,5 @@
 import type { Locator, Page } from 'playwright';
+import type { ScrapeProgressEvent } from '../types';
 import {
     COMPANY_SELECTOR,
     DESCRIPTION_SELECTOR,
@@ -27,6 +28,7 @@ export async function readJobDetailPane(
     jobItem: Locator,
     page: Page,
     sourceJobId: string | null,
+    onProgress?: (event: ScrapeProgressEvent) => void,
 ): Promise<JobDetailPane> {
     const company = await trim<string>(jobItem, COMPANY_SELECTOR, { page });
     if (!company) throw new Error('No company in detail pane for job');
@@ -49,7 +51,7 @@ export async function readJobDetailPane(
         detailTitleHref,
         baseUrl: page.url(),
     });
-    const lateOverlayDetected = await checkForLateOverlay(page);
+    const lateOverlayDetected = await checkForLateOverlay(page, onProgress);
     return {
         company,
         descriptionText,

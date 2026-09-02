@@ -20,6 +20,7 @@ export {
     scrapeJob,
     scrapeAllJobsOnce,
     clearBlockingOverlays,
+    pickDismissButtonIndex,
     scrollLoadPhase,
     clickLoadPhase,
     registerJobOccurrence,
@@ -33,4 +34,5 @@ export type {
     ScrapeJobOptions,
     ScrollLoadPhaseOptions,
     ClickLoadPhaseOptions,
+    OverlayClearOptions,
 } from './scraper';

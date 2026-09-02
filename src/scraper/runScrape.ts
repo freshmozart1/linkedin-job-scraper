@@ -56,6 +56,11 @@ export const runScrape: RunScraper = async ({
             requiredConsecutiveClear:
                 scraperOptions?.overlayClear?.requiredConsecutiveClear ?? 5,
             pollIntervalMs: scraperOptions?.overlayClear?.pollIntervalMs ?? 300,
+            maxDismissAttempts:
+                scraperOptions?.overlayClear?.maxDismissAttempts ?? 2,
+            neutralizeStuckOverlay:
+                scraperOptions?.overlayClear?.neutralizeStuckOverlay ?? true,
+            onProgress,
         });
 
         const discoveredJobs = await loadAllJobs(

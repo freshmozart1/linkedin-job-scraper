@@ -16,6 +16,11 @@ export { ScrapeAbortedError } from './ScrapeAbortedError';
 export { scrapeJob } from './scrapeJob';
 export { scrapeAllJobsOnce } from './scrapeAllJobsOnce';
 export { clearBlockingOverlays } from './clearBlockingOverlays';
+// Pure, so it is exported for the same reason isCompanyMismatch is: the
+// whole tier ordering is unit-testable with no browser in the way. Its
+// browser-side siblings (readOverlayDiagnostics, neutralizeOverlay) stay
+// internal.
+export { pickDismissButtonIndex } from './pickDismissButtonIndex';
 export { scrollLoadPhase } from './scrollLoadPhase';
 export { clickLoadPhase } from './clickLoadPhase';
 export { registerJobOccurrence } from './registerJobOccurrence';
@@ -26,5 +31,6 @@ export { clampTotalJobs } from './clampTotalJobs';
 
 export type { ScrapeContext } from './scrapeContext';
 export type { ScrapeJobOptions } from './scrapeJob';
+export type { OverlayClearOptions } from './clearBlockingOverlays';
 export type { ScrollLoadPhaseOptions } from './scrollLoadPhase';
 export type { ClickLoadPhaseOptions } from './clickLoadPhase';

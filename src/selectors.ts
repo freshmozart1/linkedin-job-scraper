@@ -61,3 +61,47 @@ export const COMPANY_LOCATION_ITEM_SELECTOR = 'section.locations li';
  * which is subject to localization.
  */
 export const COMPANY_PRIMARY_TAG_SELECTOR = '.tag-sm';
+
+// Overlay dismissal (see scraper/clearBlockingOverlays.ts).
+/**
+ * Every clickable control inside an overlay, in DOM order. Deliberately
+ * broader than `button` alone: an interstitial's close control is often an
+ * `[role="button"]` icon span rather than a real `<button>`, and missing it
+ * is exactly the "nothing was ever clicked" failure GitHub issue #27
+ * describes.
+ *
+ * This same string is handed to `readOverlayDiagnostics`'s `page.evaluate`
+ * as an explicit argument, so the `buttonNames[i]` it reports lines up
+ * index-for-index with `overlay.locator(OVERLAY_BUTTON_SELECTOR).nth(i)`.
+ * That alignment is load-bearing: `pickDismissButtonIndex` chooses an index
+ * off the names, and the click is then aimed by that same index.
+ */
+export const OVERLAY_BUTTON_SELECTOR = 'button, [role="button"]';
+/**
+ * Accessible names that identify an overlay control as a *dismiss* control.
+ *
+ * Widened well past the original `/reject|dismiss|accept/i` (GitHub issue
+ * #27): a sign-in / "join LinkedIn" interstitial's close control is
+ * commonly named `Close`, `Schließen`, `×` or `Zurück`, none of which the
+ * old pattern matched — so nothing was ever clicked and the caller burned
+ * its entire retry budget against an overlay that was still there.
+ *
+ * The word alternatives carry only a *leading* `\b`, not a trailing one, so
+ * `Dismissed` / `Accept all` still match the way the original substring
+ * pattern did, while `Feedback` no longer matches on `back`. The `×`-family
+ * glyphs are matched bare: an icon-only close control frequently has no
+ * name other than the multiplication sign itself, and `\b` (ASCII-word
+ * based) doesn't behave usefully around non-ASCII characters.
+ */
+export const OVERLAY_DISMISS_NAME_PATTERN =
+    /\b(?:reject|dismiss|accept|close|back|no thanks|not now|skip|ablehnen|akzeptieren|zustimmen|verwerfen|zur(?:ü|ue)ck|sp(?:ä|ae)ter|schlie(?:ß|ss)en)|[×✕✖⨯]/i;
+/**
+ * Accessible names that identify an overlay control as one that would
+ * navigate the scrape *off* the search page. This is the reason
+ * `pickDismissButtonIndex` does not simply "fall back to any button inside
+ * the overlay": blind-clicking inside a sign-in interstitial otherwise hits
+ * *Sign in* / *Join now* and loses the job list for the rest of the run —
+ * a strictly worse outcome than the stuck overlay this all exists to fix.
+ */
+export const OVERLAY_SIGN_IN_NAME_PATTERN =
+    /\b(?:sign\s*-?\s*(?:in|up)|log\s*-?\s*in|login|join|register|apply|continue with|anmelden|einloggen|registrieren|bewerben)/i;

@@ -30,6 +30,14 @@ export interface FakePageConfig {
         url: string,
         options?: { waitUntil?: string; timeout?: number },
     ) => void | Promise<void>;
+    /**
+     * Backs `page.keyboard.press(key)` — clearBlockingOverlays' Escape
+     * fallback. Left unconfigured, `page.keyboard` is absent entirely, which
+     * is itself worth exercising: the production code has to survive a page
+     * with no usable keyboard (one torn down mid-clear) rather than letting
+     * a failed fallback abort the whole clear attempt.
+     */
+    keyboardPress?: (key: string) => void | Promise<void>;
 }
 
 export function createFakePage(config: FakePageConfig = {}): Page {
@@ -53,6 +61,17 @@ export function createFakePage(config: FakePageConfig = {}): Page {
             if (config.goto) await config.goto(url, options);
             return null;
         },
+        // Only present when configured, mirroring a real page whose keyboard
+        // has gone away — see FakePageConfig.keyboardPress.
+        ...(config.keyboardPress
+            ? {
+                  keyboard: {
+                      press: async (key: string) => {
+                          await config.keyboardPress?.(key);
+                      },
+                  },
+              }
+            : {}),
     };
     return page as unknown as Page;
 }

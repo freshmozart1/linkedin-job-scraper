@@ -1,5 +1,10 @@
 import type { Page } from 'playwright';
-import type { JobCardIdentity, JobResult, ShouldScrapeJob } from '../types';
+import type {
+    JobCardIdentity,
+    JobResult,
+    ScrapeProgressEvent,
+    ShouldScrapeJob,
+} from '../types';
 import type { CompanyLookup } from '../companyLookup';
 import { JOB_CRITERIA_VALUE_SELECTOR } from '../selectors';
 import { jobItemsLocator } from './jobItemsLocator';
@@ -23,6 +28,13 @@ export interface ScrapeJobOptions {
     clickRetryAttempts?: number;
     companyLookup: CompanyLookup;
     shouldScrapeJob?: ShouldScrapeJob;
+    /**
+     * Passed straight through to the three overlay helpers below, which are
+     * otherwise the only part of a job's scrape with no route back to the
+     * run's progress stream. Nothing here emits a job-level event of its
+     * own — that stays scrapeJobAndRecord's job.
+     */
+    onProgress?: (event: ScrapeProgressEvent) => void;
 }
 
 export async function scrapeJob(
@@ -102,8 +114,9 @@ export async function scrapeJob(
             jobItem,
             page,
             options.clickRetryAttempts,
+            options.onProgress,
         );
-        await dismissOverlayAfterClick(page);
+        await dismissOverlayAfterClick(page, options.onProgress);
         await waitForJobDetailToLoad(page, sourceJobId);
         const {
             company,
@@ -111,7 +124,12 @@ export async function scrapeJob(
             companyMismatch,
             sourceJobIdMismatch,
             lateOverlayDetected,
-        } = await readJobDetailPane(jobItem, page, sourceJobId);
+        } = await readJobDetailPane(
+            jobItem,
+            page,
+            sourceJobId,
+            options.onProgress,
+        );
 
         // Deliberately after readJobDetailPane's checkForLateOverlay: that check
         // has to stay tight against the company/description reads it validates,

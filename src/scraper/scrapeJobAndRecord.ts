@@ -17,6 +17,10 @@ export async function scrapeJobAndRecord(
         clickRetryAttempts: ctx.clickRetryAttempts,
         companyLookup: ctx.companyLookup,
         shouldScrapeJob: ctx.shouldScrapeJob,
+        // The only route the overlay helpers have to the progress stream:
+        // everything under scrapeJob is several calls deep and holds no
+        // reference to the run's onProgress otherwise.
+        onProgress: ctx.onProgress,
     });
     results[index] = result; // indexed write (not push) so a retry replaces, not appends
     ctx.onProgress?.(
