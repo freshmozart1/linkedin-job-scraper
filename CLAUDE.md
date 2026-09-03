@@ -14,7 +14,7 @@ This scrapes an unofficial, moving surface — LinkedIn's markup and anti-bot ga
 
 ```bash
 npm run build       # tsc -p tsconfig.json -> dist/ (JS + .d.ts + sourcemaps)
-npm test            # node --import tsx --test "test/*.test.ts"  (101 tests, no browser)
+npm test            # node --import tsx --test "test/*.test.ts"  (158 tests, no browser)
 npm run typecheck   # tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json
 
 # single test file / single test by name:
@@ -56,6 +56,8 @@ A clear escalates cheapest-first rather than repeating one blind click (GitHub i
 Every per-click timeout is clamped by `boundedBy(deadline, cap, roundsLeft)`, which divides the *remaining* budget by the rounds still allowed plus one. Both escalation triggers are only evaluated at the top of a round, so without that reserve a round can overshoot the deadline and take the neutralize tier down with it — at `checkForLateOverlay`'s 3000ms two full-cost rounds end past the deadline with `failedRounds` only just reaching `maxDismissAttempts`, and the round that would have neutralized never runs.
 
 `clearBlockingOverlays` returns an `OverlayClearResult`, not a boolean: `stillBlocking` (not `!dismissed`) is the "the next click cannot land" answer, so callers no longer re-query the page themselves. `ScraperOptions.overlayClear`'s two tier-policy fields (`maxDismissAttempts`, `neutralizeStuckOverlay`) are threaded to *every* clear site via `OverlayClearSettings` — through `ScrapeContext` for the in-job clears and `ClickLoadPhaseOptions` for the load phase — since applying them only to `runScrape`'s own clear would mutate the DOM on every job for a caller who asked for `neutralizeStuckOverlay: false`. The timings stay per-site: each clear has its own budget for its own point in the job.
+
+The ladder is spread over five files, and the split lines are not arbitrary. `clearBlockingOverlays.ts` keeps only the poll-and-escalate state machine, whose branches share six pieces of loop-carried state and read top-to-bottom. `clickOverlayDismissControl.ts` owns the dismiss-click tier *and* `boundedBy` with the two caps it clamps (`MAX_DISMISS_CLICK_MS`, `MAX_HIDDEN_WAIT_MS`) — nothing else uses them, so the whole budget-clamping concern moves out whole rather than making every reader of the ladder wade through it. It takes `diagnostics` as a non-nullable parameter on purpose: `pickDismissButtonIndex` returns a *positional* index, so a retained read from an earlier round can describe a modal that is no longer the first match and send the click into the new one's *Sign in* — a caller with nothing fresh to pass has nothing to click and must not call it. `toOverlayClearSettings.ts` is the `ScraperOptions` → `OverlayClearSettings` narrowing; it is a function rather than a spread because `runScrape` and `loadAllJobs` both need it and were each spelling the two fields out by hand, so a third tier option would have had to be remembered in both — and a spread of the caller's whole `overlayClear` would carry the timing fields too, overwriting each site's own budget with one chosen for a different site. `describeOverlayDiagnostics.ts` renders the diagnostics to one length-capped line; it is public because that exact string is what a blocked job's `error` carries, and a consumer handling `overlay:undismissed` should not have to re-derive the format. `readOverlayDiagnostics.ts` and `neutralizeOverlay.ts` stay internal — they are `page.evaluate` bodies, untestable without a browser and useless outside the ladder.
 
 ### Staleness and the single retry pass
 

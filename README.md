@@ -112,7 +112,7 @@ interface JobResultBase {
   index: number;                    // position in the loaded list
   companyMismatch: boolean;         // list-pane company disagreed with detail-pane company
   sourceJobIdMismatch: boolean;     // detail pane's own job ID disagreed with the clicked job's
-  lateOverlayDetected: boolean;     // a sign-in overlay was visible when this job's data was read
+  lateOverlayDetected: boolean;     // an overlay was over the pane when this job's data was read, however it was then closed
   scrapedAt: string;                // ISO-8601 timestamp, new Date().toISOString()
   duplicateOfIdx: number | null;    // index of the first job with this posting ID, else null
 }
@@ -206,6 +206,7 @@ The three staleness signals, present on both variants (always `false` on a faile
 
 - `companyMismatch` catches the list-pane company disagreeing with the detail-pane company.
 - `sourceJobIdMismatch` catches the narrower case that slips past it — a detail pane left over from an *earlier posting at the same company*, detected by comparing the detail pane's own title-link job ID against the clicked job's `sourceJobId`.
+- `lateOverlayDetected` catches a blocking overlay sitting over the pane around the moment its data was read — **however that overlay was eventually got rid of.** It is `true` for one that was dismissed by a click or by `Escape`, one that had to be forcibly neutralized, and one that was still blocking when the clear gave up alike. That is wider than it used to be: before the escalation ladder landed, the flag only meant "an overlay was *still there* after the clear failed". Reading it as "the page was blocked" now under-reports — an overlay that renders over the pane and is then closed cleanly can still have covered the read, and the read is what this flag is about. The practical consequence is that a run whose overlays are being dismissed successfully will flag more jobs than the same run did before, and each of those jobs gets the one retry a stale result is entitled to rather than being kept as trustworthy.
 - Pass the result to the exported `isStaleResult(result)` rather than testing them by hand; it folds all three into one predicate, only returns `true` for a `'success'` result, and is the same check the engine used to decide whether to retry.
 - A result still flagged after the run means the retry didn't clear it — treat its `company`/`descriptionText` as possibly belonging to the previously-viewed job.
 
@@ -330,7 +331,7 @@ type ScrapeProgressEvent =
 - `job:start` — about to scrape the job at `index` (0-based) out of `total`.
 - `job:done` — a job finished scraping and the result looks trustworthy. This is also the event a `status: 'failed'` job emits — check `result.status`, don't assume done means scraped.
 - `overlay:undismissed` — a blocking overlay could not be closed by clicking a control inside it or by pressing `Escape`, so it was either forcibly neutralized (`neutralized: true` — its `--visible` modifier stripped and `pointer-events`/`visibility` forced off, which unblocks the page) or was still there when the clear gave up (`neutralized: false`). `diagnostics` carries what the overlay was — its collapsed text, its full class list, and the accessible name of every control inside it — or `null` if the read itself failed. Not tied to a job index, and *not* emitted on the ordinary path where a click or `Escape` closed the overlay: that happens on virtually every guest page load. A single stuck overlay can emit this several times for one job, since each clear site reports independently.
-- `job:stale` — a job finished scraping but `isStaleResult(result)` is true: the scrape succeeded, yet the detail-pane company disagreed with the list, the detail pane's own job ID disagreed with the clicked job's, or a sign-in overlay was still visible when the data was read. Emitted *instead of* `job:done` for that job, never both.
+- `job:stale` — a job finished scraping but `isStaleResult(result)` is true: the scrape succeeded, yet the detail-pane company disagreed with the list, the detail pane's own job ID disagreed with the clicked job's, or an overlay was over the pane when the data was read (whether or not it was then closed — see `lateOverlayDetected` above). Emitted *instead of* `job:done` for that job, never both.
 
 Each job emits exactly one `job:start`, then exactly one of `job:done`/`job:stale`. Stale jobs get a single retry pass after the whole list has been scraped once, which re-emits the full trio for the same `index` — so a caller keying on `index` should overwrite, not append, and `total` is an upper bound on progress rather than an event count. `result` is the same object written into `outcome.results[index]`.
 
@@ -350,6 +351,23 @@ onProgress: (event) => {
 ```
 
 `isStaleResult` is exported so callers can apply the same classification to any `JobResult` after the fact (e.g. when inspecting `outcome.results`) without re-deriving the condition themselves.
+
+`overlay:undismissed`'s `diagnostics` payload is an `OverlayDiagnostics`, and `describeOverlayDiagnostics` renders it to the same one-line, length-capped string a blocked job's `error` carries — exported so you can log the event in the format you'd see in a failed result, rather than re-deriving it:
+
+```ts
+import { describeOverlayDiagnostics } from 'linkedin-job-scraper';
+
+interface OverlayDiagnostics {
+  text: string;          // the overlay's own text, whitespace collapsed and length-capped
+  classes: string[];     // its full class list in DOM order — which overlay variant was on screen
+  buttonNames: string[]; // each control's accessible name; '' for the icon-only × close control
+}
+
+describeOverlayDiagnostics(event.diagnostics);
+// 'overlay text: "Sign in to view more jobs"; classes: [modal__overlay modal__overlay--visible]; buttons: ["", "Sign in", "Join now"]'
+```
+
+It accepts `null` (rendering `overlay diagnostics unavailable`), so you can pass `event.diagnostics` straight through without narrowing it first. The read behind it uses `textContent`, not `innerText`, on purpose: an overlay whose base classes still say `invisible` reports an empty `innerText` even while it is intercepting every click.
 
 ## URL helpers
 
