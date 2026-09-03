@@ -24,6 +24,21 @@ export interface OverlayClearOptions {
 }
 
 /**
+ * The part of `OverlayClearOptions` a caller steers from `ScraperOptions`,
+ * threaded down to every clear site in a run rather than only to the one
+ * `runScrape` performs after `page.goto`. Without it, `neutralizeStuckOverlay:
+ * false` still mutated the DOM on every job, since the in-job clear sites
+ * (clickWithOverlayRetries / dismissOverlayAfterClick / checkForLateOverlay)
+ * build their own hardcoded option objects. Timings stay per-site: each of
+ * those has its own budget for its own point in the job, and only the tier
+ * policy is the caller's to set.
+ */
+export type OverlayClearSettings = Pick<
+    OverlayClearOptions,
+    'maxDismissAttempts' | 'neutralizeStuckOverlay' | 'onProgress'
+>;
+
+/**
  * Longest a single dismiss click may block. Deliberately much shorter than
  * the old 2s: `checkForLateOverlay` gives this whole function only 3000ms,
  * so a click allowed to eat 2s of that leaves no budget to escalate to
@@ -41,15 +56,24 @@ const MAX_DISMISS_CLICK_MS = 1000;
 const MAX_HIDDEN_WAIT_MS = 500;
 
 /**
- * A Playwright timeout that can never outlive this call's own deadline.
- * Without the clamp, `checkForLateOverlay`'s 3000ms budget could be spent
- * entirely inside one click, leaving nothing for the Escape and neutralize
- * tiers below it — which is the same "one blocking wait eats everything"
- * shape as the bug being fixed. Never returns 0: Playwright reads 0 as
- * "no timeout at all".
+ * A Playwright timeout that can never outlive this call's own deadline, and
+ * that can never eat the budget the tiers below it still need.
+ *
+ * Clamping against the deadline alone is not enough. Both escalation triggers
+ * are only evaluated at the *top* of a round, so a round that overshoots the
+ * deadline takes the whole ladder down with it: at `checkForLateOverlay`'s
+ * 3000ms, two rounds of `MAX_DISMISS_CLICK_MS + MAX_HIDDEN_WAIT_MS + poll`
+ * (~1700ms each) end past the deadline with `failedRounds` only just reaching
+ * `maxDismissAttempts`, so the round that would have neutralized never runs —
+ * the ladder's last rung was unreachable for that caller. `roundsLeft` is how
+ * many dismiss rounds may still run, and the `+ 1` reserves a share for the
+ * neutralize round that has to follow them.
+ *
+ * Never returns 0: Playwright reads 0 as "no timeout at all".
  */
-function boundedBy(deadline: number, cap: number): number {
-    return Math.max(1, Math.min(cap, deadline - Date.now()));
+function boundedBy(deadline: number, cap: number, roundsLeft: number): number {
+    const share = (deadline - Date.now()) / (roundsLeft + 1);
+    return Math.max(1, Math.floor(Math.min(cap, share)));
 }
 
 // Clears whatever is blocking clicks on the page, escalating cheapest-first
@@ -117,19 +141,29 @@ export async function clearBlockingOverlays(
         }
 
         consecutiveNotVisible = 0;
-        // Kept across rounds: a later read can come back null (the page
-        // navigated mid-evaluate), and stale-but-real diagnostics beat none
-        // at all when this ends up reporting a failure.
-        const read = await readOverlayDiagnostics(page).catch(() => null);
-        if (read) diagnostics = read;
-
         // Neutralizing needs a round of its own to run in, so it triggers
         // while there is still budget left rather than after the loop has
         // already fallen out of the deadline with nothing done.
-        if (
+        const escalate =
             failedRounds >= maxDismissAttempts ||
-            deadline - Date.now() <= pollIntervalMs
-        ) {
+            deadline - Date.now() <= pollIntervalMs;
+
+        // One page.evaluate per round while a control still has to be picked
+        // out of it — and, on an escalating round, only if there is nothing
+        // to report yet. An escalating round never picks a control, so
+        // re-reading one it already holds would be a round-trip per poll for
+        // the rest of the budget.
+        //
+        // The result is kept across rounds: a later read can come back null
+        // (the page navigated mid-evaluate), and stale-but-real diagnostics
+        // beat none at all when this ends up reporting a failure.
+        const read: OverlayDiagnostics | null =
+            escalate && diagnostics
+                ? null
+                : await readOverlayDiagnostics(page).catch(() => null);
+        if (read) diagnostics = read;
+
+        if (escalate) {
             if (!neutralizeStuckOverlay) break;
             const forced = await neutralizeOverlay(page).catch(() => 0);
             // Nothing matched in the page, so there is no last resort left
@@ -146,19 +180,36 @@ export async function clearBlockingOverlays(
             continue;
         }
 
-        const buttonIndex = diagnostics
-            ? pickDismissButtonIndex(diagnostics.buttonNames)
+        // `read`, never the retained `diagnostics`: the index is positional,
+        // so it only addresses the intended control when the names came from
+        // *this* round's read of *this* overlay. A retained read can describe
+        // a modal that is no longer the first match, and its index could then
+        // land on the new one's Sign in / Join now — the one click this whole
+        // picker exists to avoid.
+        const roundsLeft = Math.max(1, maxDismissAttempts - failedRounds);
+        const buttonIndex = read
+            ? pickDismissButtonIndex(read.buttonNames)
             : null;
         if (buttonIndex !== null) {
             await overlay
                 .locator(OVERLAY_BUTTON_SELECTOR)
                 .nth(buttonIndex)
-                .click({ timeout: boundedBy(deadline, MAX_DISMISS_CLICK_MS) })
+                .click({
+                    timeout: boundedBy(
+                        deadline,
+                        MAX_DISMISS_CLICK_MS,
+                        roundsLeft,
+                    ),
+                })
                 .catch(() => {});
             await overlay
                 .waitFor({
                     state: 'hidden',
-                    timeout: boundedBy(deadline, MAX_HIDDEN_WAIT_MS),
+                    timeout: boundedBy(
+                        deadline,
+                        MAX_HIDDEN_WAIT_MS,
+                        roundsLeft,
+                    ),
                 })
                 .catch(() => {});
             if ((await findVisibleOverlay(page)) === null) {

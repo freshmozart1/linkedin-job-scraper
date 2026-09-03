@@ -1,10 +1,5 @@
 import type { Page } from 'playwright';
-import type {
-    JobCardIdentity,
-    JobResult,
-    ScrapeProgressEvent,
-    ShouldScrapeJob,
-} from '../types';
+import type { JobCardIdentity, JobResult, ShouldScrapeJob } from '../types';
 import type { CompanyLookup } from '../companyLookup';
 import { JOB_CRITERIA_VALUE_SELECTOR } from '../selectors';
 import { jobItemsLocator } from './jobItemsLocator';
@@ -16,6 +11,7 @@ import { registerJobOccurrence } from './registerJobOccurrence';
 import { buildSkippedResult } from './buildSkippedResult';
 import { sleep } from './sleep';
 import { clickWithOverlayRetries } from './clickWithOverlayRetries';
+import type { OverlayClearSettings } from './clearBlockingOverlays';
 import { dismissOverlayAfterClick } from './dismissOverlayAfterClick';
 import { waitForJobDetailToLoad } from './waitForJobDetailToLoad';
 import { readJobDetailPane } from './readJobDetailPane';
@@ -31,10 +27,12 @@ export interface ScrapeJobOptions {
     /**
      * Passed straight through to the three overlay helpers below, which are
      * otherwise the only part of a job's scrape with no route back to the
-     * run's progress stream. Nothing here emits a job-level event of its
-     * own — that stays scrapeJobAndRecord's job.
+     * run's progress stream — nor to the caller's `ScraperOptions.overlayClear`
+     * tier policy, which would otherwise apply only to the single clear
+     * `runScrape` does after `page.goto`. Nothing here emits a job-level event
+     * of its own — that stays scrapeJobAndRecord's job.
      */
-    onProgress?: (event: ScrapeProgressEvent) => void;
+    overlayClear?: OverlayClearSettings;
 }
 
 export async function scrapeJob(
@@ -114,9 +112,9 @@ export async function scrapeJob(
             jobItem,
             page,
             options.clickRetryAttempts,
-            options.onProgress,
+            options.overlayClear,
         );
-        await dismissOverlayAfterClick(page, options.onProgress);
+        await dismissOverlayAfterClick(page, options.overlayClear);
         await waitForJobDetailToLoad(page, sourceJobId);
         const {
             company,
@@ -128,7 +126,7 @@ export async function scrapeJob(
             jobItem,
             page,
             sourceJobId,
-            options.onProgress,
+            options.overlayClear,
         );
 
         // Deliberately after readJobDetailPane's checkForLateOverlay: that check

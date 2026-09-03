@@ -1,12 +1,5 @@
 import type { Page } from 'playwright';
-import { OVERLAY_SELECTOR } from '../selectors';
-
-/**
- * `OVERLAY_SELECTOR` as a bare class name. Derived rather than written out
- * a second time so there is still exactly one place the string lives, per
- * ../selectors' contract.
- */
-const OVERLAY_VISIBLE_CLASS = OVERLAY_SELECTOR.replace(/^\./, '');
+import { OVERLAY_SELECTOR, OVERLAY_VISIBLE_CLASS } from '../selectors';
 
 // Last resort when nothing could dismiss an overlay: take it out of the way
 // from the page side instead of letting every subsequent click retry into it
@@ -19,8 +12,18 @@ const OVERLAY_VISIBLE_CLASS = OVERLAY_SELECTOR.replace(/^\./, '');
 // Stripping it therefore restores the element's *own* hidden state rather
 // than imposing a foreign one — and it makes the element stop matching
 // `findVisibleOverlay`, which is what lets the caller conclude the page is
-// clickable again. The inline `pointer-events: none` is belt-and-suspenders
-// for the case where some other rule keeps it painted anyway.
+// clickable again.
+//
+// The inline `pointer-events: none` and `visibility: hidden` are
+// belt-and-suspenders for the case where some other rule keeps the element
+// painted anyway. Both are needed, not just the first: `findVisibleOverlay`
+// asks Playwright `isVisible()`, which reports an element with
+// `pointer-events: none` (or `opacity: 0`) as perfectly visible. Forcing only
+// pointer-events would leave the page genuinely clickable while every caller
+// still read `stillBlocking: true` — `dismissOverlayAfterClick` would fail the
+// job, and the loop would re-neutralize every poll until its deadline, which
+// is the same "tens of seconds per job" symptom this exists to end.
+// `visibility: hidden` is the one thing `isVisible()` does honour.
 //
 // Every match is neutralized, not just `.first()`: the overlay a click
 // reports as the interceptor is whichever one is topmost, so clearing only
@@ -35,7 +38,7 @@ export async function neutralizeOverlay(page: Page): Promise<number> {
         ({ overlaySelector, visibleClass }) => {
             interface MinimalOverlayElement {
                 classList: { remove(token: string): void };
-                style: { pointerEvents: string };
+                style: { pointerEvents: string; visibility: string };
             }
             const g = globalThis as unknown as {
                 document: {
@@ -50,6 +53,7 @@ export async function neutralizeOverlay(page: Page): Promise<number> {
             for (const overlay of overlays) {
                 overlay.classList.remove(visibleClass);
                 overlay.style.pointerEvents = 'none';
+                overlay.style.visibility = 'hidden';
             }
             return overlays.length;
         },

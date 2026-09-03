@@ -148,6 +148,146 @@ describe('scrapeJob()', () => {
         assert.equal(result.lateOverlayDetected, true);
         assert.equal(isStaleResult(result), true);
     });
+    it('flags lateOverlayDetected when a late overlay was merely dismissed', async ({
+        assert,
+    }) => {
+        // The escalation ladder dismisses far more overlays than the old
+        // name-matched click could — the icon-only `×` below is GitHub issue
+        // #27's own overlay. Reading only `stillBlocking`/`neutralized` would
+        // make the flag go dead exactly as the ladder got better at its job:
+        // the overlay was over the pane at the moment the description was
+        // read, so the result is still suspect and still owed the one retry
+        // retryStaleJobs gives it, however it was eventually closed.
+        let overlayVisible = false;
+        const jobItem = createFakeJobLocator({
+            title: 'Frontend Developer',
+            listCompany: 'Acme',
+            sourceJobId: '111',
+            sourceUrl:
+                'https://de.linkedin.com/jobs/view/frontend-developer-at-acme-111',
+            location: 'Berlin, Berlin, Germany',
+            postedAt: '2026-07-21',
+            companyUrl: 'https://de.linkedin.com/company/acme',
+        });
+        const page = createFakePage({
+            locatorsBySelector: {
+                [JOB_LIST_SELECTOR]: createFakeLocator({ nth: () => jobItem }),
+                ...baseScrapeJobLocators(() => 'Acme'),
+                [OVERLAY_SELECTOR]: createFakeLocator({
+                    isVisible: () => overlayVisible,
+                    // The unnamed `×` close control: clicking it works, so the
+                    // ladder never reaches Escape or neutralizing.
+                    locator: () =>
+                        createFakeLocator({
+                            nth: () =>
+                                createFakeLocator({
+                                    click: () => {
+                                        overlayVisible = false;
+                                    },
+                                }),
+                        }),
+                }),
+                [DESCRIPTION_SELECTOR]: createFakeLocator({
+                    innerText: () => {
+                        overlayVisible = true;
+                        return 'A description.';
+                    },
+                }),
+            },
+            defaultLocator: createFakeLocator({
+                waitFor: () => {},
+                isVisible: () => false,
+            }),
+            evaluate: (arg) => {
+                const passed = (arg ?? {}) as Record<string, unknown>;
+                if ('buttonSelector' in passed)
+                    return {
+                        text: 'Sign in to view more jobs',
+                        classes: ['modal__overlay--visible'],
+                        buttonNames: ['Sign in', 'Join now', ''],
+                    };
+                return undefined;
+            },
+        });
+
+        const result = await scrapeJob(page, 0, {
+            seenSourceJobIds: new Map(),
+            runTimestamp: 123,
+            companyLookup: stubCompanyLookup(),
+        });
+
+        assert.equal(result.status, 'success');
+        assert.equal(result.lateOverlayDetected, true);
+        assert.equal(isStaleResult(result), true);
+    });
+    it('fails the job with the overlay diagnostics in the error when nothing can clear it', async ({
+        assert,
+    }) => {
+        // The deliverable of GitHub issue #27: the run that produced it never
+        // learned what the overlay actually said. The diagnostics have to
+        // survive into FailedJobResult.error, not only into the progress
+        // stream, so a consumer that ignores progress events still ends up
+        // with a record of what blocked the job.
+        const jobItem = createFakeJobLocator({
+            title: 'Frontend Developer',
+            listCompany: 'Acme',
+            sourceJobId: '111',
+            sourceUrl:
+                'https://de.linkedin.com/jobs/view/frontend-developer-at-acme-111',
+            location: 'Berlin, Berlin, Germany',
+            postedAt: '2026-07-21',
+            companyUrl: 'https://de.linkedin.com/company/acme',
+        });
+        const page = createFakePage({
+            locatorsBySelector: {
+                [JOB_LIST_SELECTOR]: createFakeLocator({ nth: () => jobItem }),
+                ...baseScrapeJobLocators(() => 'Acme'),
+                // Never goes away, and neutralizing finds nothing to strip.
+                [OVERLAY_SELECTOR]: createFakeLocator({
+                    isVisible: () => true,
+                }),
+            },
+            defaultLocator: createFakeLocator({
+                waitFor: () => {},
+                isVisible: () => false,
+            }),
+            evaluate: (arg) => {
+                const passed = (arg ?? {}) as Record<string, unknown>;
+                if ('buttonSelector' in passed)
+                    return {
+                        text: 'Sign in to view more jobs',
+                        classes: ['modal__overlay--visible'],
+                        buttonNames: ['Sign in', 'Join now'],
+                    };
+                if ('visibleClass' in passed) return 0;
+                return undefined;
+            },
+        });
+
+        const result = await scrapeJob(page, 0, {
+            seenSourceJobIds: new Map(),
+            runTimestamp: 123,
+            companyLookup: stubCompanyLookup(),
+        });
+
+        assertFailed(result);
+        assert.equal(
+            result.error.startsWith('Blocked by LinkedIn sign-in wall'),
+            true,
+        );
+        assert.equal(
+            result.error.includes('overlay text: "Sign in to view more jobs"'),
+            true,
+        );
+        assert.equal(
+            result.error.includes('classes: [modal__overlay--visible]'),
+            true,
+        );
+        assert.equal(
+            result.error.includes('buttons: ["Sign in", "Join now"]'),
+            true,
+        );
+    });
     it('flags a same-company stale detail pane via sourceJobIdMismatch even though companyMismatch misses it', async ({
         assert,
     }) => {

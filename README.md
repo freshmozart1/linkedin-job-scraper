@@ -65,6 +65,22 @@ Must be synchronous — the return value is checked directly, so a `Promise` (fr
 
 Normally called once per job card, but a job whose first pass came back `'success'` yet stale (see the staleness flags in the field reference below) gets exactly one retry, which consults this callback again — a stateful predicate can see the same job twice with different answers across the two passes, and a retry that flips to `false` replaces the earlier `'success'` result with an empty `'skipped'` one.
 
+`overlayClear` groups the settings for the blocking-overlay ladder. LinkedIn's guest pages put a `.modal__overlay--visible` over the job list (cookie consent on load, a "sign in to view more jobs" nag later) that intercepts every click. Each round against a still-visible overlay reads it once, clicks the best control it can find (never *Sign in* / *Join now* — navigating off the search page loses the rest of the run), and presses `Escape`; once `maxDismissAttempts` rounds have failed, the overlay is neutralized outright so the run continues instead of stalling:
+
+```ts
+scraperOptions: {
+  overlayClear: {
+    timeoutMs: 15000,               // budget for the clear right after the search page loads
+    pollIntervalMs: 300,            // gap between polls
+    requiredConsecutiveClear: 5,    // not-visible reads needed before concluding "clear"
+    maxDismissAttempts: 2,          // failed click+Escape rounds before neutralizing; 0 neutralizes immediately
+    neutralizeStuckOverlay: true,   // allow the last-resort DOM mutation at all
+  },
+}
+```
+
+The three timing fields apply only to that first clear — every later clear (before each job-card click, after it, and once more right after the detail pane is read) keeps its own tighter budget, since each has its own point in the job. `maxDismissAttempts` and `neutralizeStuckOverlay` are the tier *policy* and do apply everywhere. Set `neutralizeStuckOverlay: false` to leave the page untouched and accept a failed job (`Blocked by LinkedIn sign-in wall (could not dismiss dialog): …`, with the overlay diagnostics appended) instead.
+
 `companyLookup` groups the settings for the company-address pass:
 
 ```ts
@@ -301,18 +317,24 @@ type ScrapeProgressEvent =
   | { type: 'jobs:found'; total: number }
   | { type: 'job:start'; index: number; total: number }
   | { type: 'job:done'; result: JobResult }
-  | { type: 'job:stale'; result: JobResult };
+  | { type: 'job:stale'; result: JobResult }
+  | {
+      type: 'overlay:undismissed';
+      neutralized: boolean;
+      diagnostics: OverlayDiagnostics | null;
+    };
 ```
 
 - `jobs:loading` — the unique job count changed during the scroll/click loading phase (in practice, grew). `count` is the number of distinct posting IDs currently in the list, not a delta; it fires several times per run, and not at all if loading never makes progress. Not capped by `maxJobs` — loading always discovers the full search before scraping starts, so `count` here can exceed the `total` reported next.
 - `jobs:found` — loading finished; `total` is the number of jobs about to be scraped and is final for the run. Reflects `scraperOptions.maxJobs` when set.
 - `job:start` — about to scrape the job at `index` (0-based) out of `total`.
 - `job:done` — a job finished scraping and the result looks trustworthy. This is also the event a `status: 'failed'` job emits — check `result.status`, don't assume done means scraped.
+- `overlay:undismissed` — a blocking overlay could not be closed by clicking a control inside it or by pressing `Escape`, so it was either forcibly neutralized (`neutralized: true` — its `--visible` modifier stripped and `pointer-events`/`visibility` forced off, which unblocks the page) or was still there when the clear gave up (`neutralized: false`). `diagnostics` carries what the overlay was — its collapsed text, its full class list, and the accessible name of every control inside it — or `null` if the read itself failed. Not tied to a job index, and *not* emitted on the ordinary path where a click or `Escape` closed the overlay: that happens on virtually every guest page load. A single stuck overlay can emit this several times for one job, since each clear site reports independently.
 - `job:stale` — a job finished scraping but `isStaleResult(result)` is true: the scrape succeeded, yet the detail-pane company disagreed with the list, the detail pane's own job ID disagreed with the clicked job's, or a sign-in overlay was still visible when the data was read. Emitted *instead of* `job:done` for that job, never both.
 
 Each job emits exactly one `job:start`, then exactly one of `job:done`/`job:stale`. Stale jobs get a single retry pass after the whole list has been scraped once, which re-emits the full trio for the same `index` — so a caller keying on `index` should overwrite, not append, and `total` is an upper bound on progress rather than an event count. `result` is the same object written into `outcome.results[index]`.
 
-Because the union is discriminated, a `switch (event.type)` narrows each branch:
+`overlay:undismissed` is the one event not tied to a job — it can fire during the initial page load and the job-loading phase as well as mid-job. Because the union is discriminated, a `switch (event.type)` narrows each branch:
 
 ```ts
 onProgress: (event) => {

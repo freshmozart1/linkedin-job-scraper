@@ -22,6 +22,12 @@ export async function loadAllJobs(
         maxSeeMoreClicks: scraperOptions?.maxSeeMoreClicks,
         stableClicksToStop: scraperOptions?.stableClicksToStop,
         clickRetryAttempts: scraperOptions?.clickRetryAttempts,
+        overlayClear: {
+            maxDismissAttempts:
+                scraperOptions?.overlayClear?.maxDismissAttempts,
+            neutralizeStuckOverlay:
+                scraperOptions?.overlayClear?.neutralizeStuckOverlay,
+        },
         onProgress,
         signal,
     });

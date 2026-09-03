@@ -17,11 +17,37 @@ export function describeOverlayDiagnostics(
     // saying so is more useful than an empty bracket soup that reads like
     // "the overlay had no text and no buttons".
     if (!diagnostics) return 'overlay diagnostics unavailable';
-    const quoted = (values: string[]): string =>
-        values.map((value) => `"${value}"`).join(', ');
     return [
-        `overlay text: "${diagnostics.text.replace(/\s+/g, ' ').trim()}"`,
-        `classes: [${diagnostics.classes.join(' ')}]`,
-        `buttons: [${quoted(diagnostics.buttonNames)}]`,
+        // Already collapsed and length-capped at the source (see
+        // readOverlayDiagnostics), so it goes in as read.
+        `overlay text: "${diagnostics.text}"`,
+        `classes: [${capped(diagnostics.classes).join(' ')}]`,
+        `buttons: [${capped(diagnostics.buttonNames).map(quote).join(', ')}]`,
     ].join('; ');
+}
+
+/**
+ * Caps a list the same way `readOverlayDiagnostics` caps the overlay text,
+ * and for the same reason: a mis-scoped selector matching half the page
+ * reports hundreds of `button, [role="button"]` names, and this string ends
+ * up verbatim in a `FailedJobResult`'s `error` field. Capping only the text
+ * while the lists stayed unbounded left the bloat the cap was added to
+ * prevent.
+ */
+function capped(values: string[]): string[] {
+    if (values.length <= MAX_LISTED_VALUES) return values;
+    const kept = values.slice(0, MAX_LISTED_VALUES);
+    return [...kept, `+${values.length - MAX_LISTED_VALUES} more`];
+}
+
+const MAX_LISTED_VALUES = 12;
+const MAX_VALUE_LENGTH = 60;
+
+/** Quoted, truncated, and with any inner quote escaped so one name can't read as two. */
+function quote(value: string): string {
+    const clipped =
+        value.length > MAX_VALUE_LENGTH
+            ? `${value.slice(0, MAX_VALUE_LENGTH)}…`
+            : value;
+    return `"${clipped.replace(/"/g, '\\"')}"`;
 }

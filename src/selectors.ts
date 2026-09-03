@@ -14,7 +14,18 @@ export const VIEWED_ALL_JOBS_SELECTOR = '.see-more-jobs__viewed-all';
 export const LIST_COMPANY_SELECTOR = 'h4.base-search-card__subtitle';
 export const COMPANY_SELECTOR = '.topcard__org-name-link';
 export const DESCRIPTION_SELECTOR = '.description__text';
-export const OVERLAY_SELECTOR = '.modal__overlay--visible';
+/**
+ * The bare class name LinkedIn toggles to make an overlay block clicks.
+ * Declared as the class, with `OVERLAY_SELECTOR` derived from it, rather than
+ * the other way round: `neutralizeOverlay` hands this to `classList.remove()`,
+ * which throws `InvalidCharacterError` on any token containing whitespace. A
+ * selector that later grew a second alternative the way `LIST_POSTED_AT_SELECTOR`
+ * did (GitHub issue #15) would therefore have silently disabled the whole
+ * neutralize tier — the caller's `.catch(() => 0)` reads the throw as "nothing
+ * to neutralize". Deriving in this direction keeps that impossible.
+ */
+export const OVERLAY_VISIBLE_CLASS = 'modal__overlay--visible';
+export const OVERLAY_SELECTOR = `.${OVERLAY_VISIBLE_CLASS}`;
 export const JOB_LINK_SELECTOR = '.base-card__full-link';
 /** The company-page link nested inside the list item's company subtitle. */
 export const LIST_COMPANY_LINK_SELECTOR = 'h4.base-search-card__subtitle a';

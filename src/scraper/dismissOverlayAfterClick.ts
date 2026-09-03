@@ -1,17 +1,17 @@
 import type { Page } from 'playwright';
-import type { ScrapeProgressEvent } from '../types';
 import { clearBlockingOverlays } from './clearBlockingOverlays';
+import type { OverlayClearSettings } from './clearBlockingOverlays';
 import { describeOverlayDiagnostics } from './describeOverlayDiagnostics';
 
 export async function dismissOverlayAfterClick(
     page: Page,
-    onProgress?: (event: ScrapeProgressEvent) => void,
+    overlayClear?: OverlayClearSettings,
 ): Promise<void> {
     const { stillBlocking, diagnostics } = await clearBlockingOverlays(page, {
         timeoutMs: 8000,
         requiredConsecutiveClear: 2,
         pollIntervalMs: 200,
-        onProgress,
+        ...overlayClear,
     });
     // `stillBlocking`, not `!dismissed`: an overlay that had to be
     // neutralized was never "dismissed", yet the page is clickable and this

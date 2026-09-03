@@ -328,7 +328,9 @@ describe('clearBlockingOverlays()', () => {
         const events: ScrapeProgressEvent[] = [];
         const page = createFakePage({
             locatorsBySelector: {
-                [OVERLAY_SELECTOR]: createFakeLocator({ isVisible: () => true }),
+                [OVERLAY_SELECTOR]: createFakeLocator({
+                    isVisible: () => true,
+                }),
             },
             evaluate: overlayEvaluate({
                 diagnostics: SIGN_IN_OVERLAY,
@@ -360,5 +362,63 @@ describe('clearBlockingOverlays()', () => {
                 `expected one overlay:undismissed event, got ${JSON.stringify(events)}`,
             );
         assert.equal(event.neutralized, false);
+    });
+
+    it('never aims a click with diagnostics retained from an earlier round', async ({
+        assert,
+    }) => {
+        // The button index is positional, so it only addresses the intended
+        // control while the names came from *this* round's read of *this*
+        // overlay. A retained read can describe a modal that is no longer the
+        // first match, and replaying its index against the new one could land
+        // on Sign in / Join now — the one click the picker exists to avoid.
+        // So a round whose read came back null must not click at all, even
+        // though the retained copy is still kept for reporting.
+        let reads = 0;
+        const clicked: number[] = [];
+        const page = createFakePage({
+            locatorsBySelector: {
+                [OVERLAY_SELECTOR]: createFakeLocator({
+                    isVisible: () => true,
+                    locator: () =>
+                        createFakeLocator({
+                            nth: (index) =>
+                                createFakeLocator({
+                                    click: () => {
+                                        clicked.push(index);
+                                    },
+                                }),
+                        }),
+                }),
+            },
+            evaluate: (arg?: unknown) => {
+                const passed = (arg ?? {}) as Record<string, unknown>;
+                if ('buttonSelector' in passed) {
+                    reads += 1;
+                    // Only the first read succeeds; every later one behaves
+                    // like a page that navigated mid-evaluate.
+                    return reads === 1
+                        ? { ...SIGN_IN_OVERLAY, buttonNames: ['', 'Sign in'] }
+                        : null;
+                }
+                if ('visibleClass' in passed) return 0;
+                return undefined;
+            },
+        });
+
+        const result = await clearBlockingOverlays(page, {
+            timeoutMs: 300,
+            pollIntervalMs: 5,
+            requiredConsecutiveClear: 2,
+            maxDismissAttempts: 4,
+        });
+
+        // Exactly one click, from the one round that actually read the
+        // overlay — not one per round replaying index 0.
+        assert.deepEqual(clicked, [0]);
+        assert.equal(result.stillBlocking, true);
+        // The retained copy still rides out in the report, which is what it
+        // is kept for.
+        assert.deepEqual(result.diagnostics?.buttonNames, ['', 'Sign in']);
     });
 });
