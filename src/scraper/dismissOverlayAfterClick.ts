@@ -1,14 +1,20 @@
 import type { Page } from 'playwright';
+import type { JobBudget } from '../types';
 import { clearBlockingOverlays } from './clearBlockingOverlays';
 import type { OverlayClearSettings } from './clearBlockingOverlays';
 import { describeOverlayDiagnostics } from './describeOverlayDiagnostics';
 
+// `budget` clamps the 8s local deadline to what the job has left. Nothing
+// inside clearBlockingOverlays needed changing for that: it already ends on
+// its own `timeoutMs` deadline, so clamping the value handed to it at each
+// call site is the whole integration.
 export async function dismissOverlayAfterClick(
     page: Page,
     overlayClear?: OverlayClearSettings,
+    budget?: JobBudget,
 ): Promise<void> {
     const { stillBlocking, diagnostics } = await clearBlockingOverlays(page, {
-        timeoutMs: 8000,
+        timeoutMs: budget?.boundedTimeout(8000) ?? 8000,
         requiredConsecutiveClear: 2,
         pollIntervalMs: 200,
         ...overlayClear,

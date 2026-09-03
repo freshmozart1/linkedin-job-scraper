@@ -15,7 +15,14 @@ export function createFakeJobLocator(opts: {
     listCompany: string | null;
     sourceJobId: string | null;
     sourceUrl?: string | null;
-    onClick?: () => void;
+    /**
+     * Receives the click's `{ timeout }`, and may be async — which is how a
+     * job is made to outlive a tiny `perJobTimeoutMs` without a mocked clock.
+     * Widened additively, so every existing `onClick: () => {...}` still fits.
+     */
+    onClick?: (options?: { timeout?: number }) => void | Promise<void>;
+    /** Receives the `{ timeout }` scrapeJob bounds `scrollIntoViewIfNeeded` with, rather than letting it inherit Playwright's 30s default. */
+    onScrollIntoView?: (options?: { timeout?: number }) => void | Promise<void>;
     hasTitle?: boolean;
     /**
      * Simulates `.base-card` being absent from the markup. Playwright's
@@ -37,6 +44,7 @@ export function createFakeJobLocator(opts: {
     const hasTitle = opts.hasTitle ?? true;
     return createFakeLocator({
         click: opts.onClick,
+        scrollIntoViewIfNeeded: opts.onScrollIntoView,
         locator: (selector) => {
             if (selector === 'h3') {
                 return createFakeLocator({

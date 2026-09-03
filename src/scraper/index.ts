@@ -32,6 +32,14 @@ export { isCompanyMismatch } from './isCompanyMismatch';
 export { isSourceJobIdMismatch } from './isSourceJobIdMismatch';
 export { isStaleResult } from './isStaleResult';
 export { clampTotalJobs } from './clampTotalJobs';
+// The two time budgets from GitHub issue #28. Exported for the same reason
+// clampTotalJobs is: both are pure factories over plain numbers and signals,
+// unit-testable with no browser in the way, and a consumer driving scrapeJob
+// directly needs createJobBudget's defaults rather than its own copy of them.
+// Their `JobBudget` / `RunTimeBudget` types live in src/types.ts with every
+// other public type and reach consumers through src/index.ts's `export *`.
+export { createJobBudget } from './jobBudget';
+export { createRunTimeBudget } from './runTimeBudget';
 
 export type { ScrapeContext } from './scrapeContext';
 export type { ScrapeJobOptions } from './scrapeJob';

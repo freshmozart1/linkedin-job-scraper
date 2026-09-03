@@ -10,8 +10,8 @@ export function createFakeLocator(config: FakeLocatorConfig = {}): Locator {
         locator: (selector: string) =>
             config.locator ? config.locator(selector) : locator,
         isVisible: async () => (config.isVisible ? config.isVisible() : true),
-        click: async () => {
-            if (config.click) await config.click();
+        click: async (options?: { timeout?: number }) => {
+            if (config.click) await config.click(options);
         },
         innerText: async () => {
             if (!config.innerText)
@@ -21,12 +21,12 @@ export function createFakeLocator(config: FakeLocatorConfig = {}): Locator {
         getAttribute: async (name: string, options?: { timeout?: number }) =>
             config.getAttribute ? config.getAttribute(name, options) : null,
         count: async () => (config.count ? config.count() : 1),
-        waitFor: async () => {
-            if (config.waitFor) await config.waitFor();
+        waitFor: async (options?: { state?: string; timeout?: number }) => {
+            if (config.waitFor) await config.waitFor(options);
         },
-        scrollIntoViewIfNeeded: async () => {
+        scrollIntoViewIfNeeded: async (options?: { timeout?: number }) => {
             if (config.scrollIntoViewIfNeeded)
-                await config.scrollIntoViewIfNeeded();
+                await config.scrollIntoViewIfNeeded(options);
         },
         allInnerTexts: async () => {
             if (!config.allInnerTexts)

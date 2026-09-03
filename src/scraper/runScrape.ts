@@ -11,6 +11,7 @@ import { clampTotalJobs } from './clampTotalJobs';
 import { scrapeAllJobsOnce } from './scrapeAllJobsOnce';
 import { retryStaleJobs } from './retryStaleJobs';
 import { ScrapeAbortedError } from './ScrapeAbortedError';
+import { createRunTimeBudget } from './runTimeBudget';
 import type { JobResult } from '../types';
 
 export const runScrape: RunScraper = async ({
@@ -25,11 +26,24 @@ export const runScrape: RunScraper = async ({
     const searchUrl = buildSearchUrl(searchParams);
     const results: JobResult[] = [];
 
+    // Deliberately the *caller's* signal, not the composed one below: an
+    // already-aborted caller signal still rejects, and the run budget's timer
+    // cannot have fired at this instant anyway.
+    //
     // Checked before the browser even launches so an already-aborted signal never
     // pays for one — nothing to clean up yet, so this stays outside the try/finally
     // below for the same reason a failing `launch` does.
     if (signal?.aborted)
         throw new ScrapeAbortedError({ results, url: searchUrl });
+
+    // Started before the launch so it measures the whole run, browser startup
+    // included. From here on `runBudget.signal` is what every phase is given,
+    // so the checkpoints that already stop on an abort stop on an expired run
+    // budget too; only this function still tells the two apart.
+    const runBudget = createRunTimeBudget(
+        scraperOptions?.maxRunDurationMs,
+        signal,
+    );
 
     const browser = await chromium.launch({
         headless: scraperOptions?.headless ?? false,
@@ -69,10 +83,22 @@ export const runScrape: RunScraper = async ({
             page,
             scraperOptions,
             onProgress,
-            signal,
+            runBudget.signal,
         );
+        // The caller's abort is checked first at every one of these three
+        // checkpoints, and always wins: a caller who asked to stop gets the
+        // rejection they expect even if the run budget expired in the same
+        // moment. An expired budget on its own is something the caller asked
+        // for too — so it resolves with what the run has, rather than
+        // throwing away every job already scraped.
         if (signal?.aborted)
             throw new ScrapeAbortedError({ results, url: searchUrl });
+        if (runBudget.exceeded())
+            return {
+                results,
+                url: searchUrl,
+                stoppedEarly: 'run-time-budget',
+            };
         const totalJobs = clampTotalJobs(
             discoveredJobs,
             scraperOptions?.maxJobs,
@@ -88,8 +114,9 @@ export const runScrape: RunScraper = async ({
             delayBetweenJobsMs: scraperOptions?.delayBetweenJobsMs,
             clickRetryAttempts: scraperOptions?.clickRetryAttempts,
             companyLookup,
-            signal,
+            signal: runBudget.signal,
             shouldScrapeJob: scraperOptions?.shouldScrapeJob,
+            perJobTimeoutMs: scraperOptions?.perJobTimeoutMs,
             // Carried per job so `neutralizeStuckOverlay` / `maxDismissAttempts`
             // reach the three in-job clear sites too, not just the clear above.
             overlayClear: toOverlayClearSettings(scraperOptions),
@@ -98,10 +125,28 @@ export const runScrape: RunScraper = async ({
         const staleIndices = await scrapeAllJobsOnce(ctx, results);
         if (signal?.aborted)
             throw new ScrapeAbortedError({ results, url: searchUrl });
+        if (runBudget.exceeded())
+            return {
+                results,
+                url: searchUrl,
+                stoppedEarly: 'run-time-budget',
+            };
         await retryStaleJobs(ctx, results, staleIndices);
         if (signal?.aborted)
             throw new ScrapeAbortedError({ results, url: searchUrl });
+        // The stale-retry pass is the last thing a run does, so a budget that
+        // expired during it cost the run nothing but those retries — the
+        // first-pass results are all in `results` already. It is still
+        // reported, because "some jobs kept a suspect first-pass result" is
+        // exactly what a consumer would want to know.
+        if (runBudget.exceeded())
+            return {
+                results,
+                url: searchUrl,
+                stoppedEarly: 'run-time-budget',
+            };
 
+        // No `stoppedEarly`: absent means the run scraped every job it found.
         return { results, url: searchUrl };
     } finally {
         // Debug-only escape hatch; only applies to headed runs (see ScraperOptions).

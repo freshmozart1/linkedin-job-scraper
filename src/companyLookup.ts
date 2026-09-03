@@ -17,7 +17,10 @@
 
 import type { Browser, BrowserContext, Page } from 'playwright';
 import { toCompanyAddresses } from './address';
-import type { CompanyAddress, RawCompanyLocation } from './types';
+// JobBudget comes from ./types (all public types live there), imported
+// type-only so this file keeps zero coupling to scraper/ — the budget is
+// created there, but nothing about reading a company page depends on it.
+import type { CompanyAddress, JobBudget, RawCompanyLocation } from './types';
 
 export interface CompanyLookupOptions {
   navigationTimeoutMs?: number;
@@ -45,8 +48,20 @@ export interface CompanyLookup {
    * when the page was read and publishes none, and to `null` when nothing
    * could be read at all (no URL, blocked page, navigation error). Never
    * rejects — a company page failing must not fail the job that referenced it.
+   *
+   * `budget` is the calling job's wall-clock budget, when it has one. It only
+   * ever shortens this lookup: the navigation timeout is clamped to what the
+   * job has left, the `emptyRetries` loop stops once there is nothing left to
+   * spend, and `delayBetweenLookupsMs` is skipped then too. Worth threading
+   * because this is the single most expensive step in a job — up to
+   * `navigationTimeoutMs × (1 + emptyRetries)` plus the delay. A budget that
+   * has already collapsed simply yields `null`, exactly like any other
+   * lookup that could not read the page.
    */
-  addressesFor(companyUrl: string | null): Promise<CompanyAddress[] | null>;
+  addressesFor(
+    companyUrl: string | null,
+    budget?: JobBudget
+  ): Promise<CompanyAddress[] | null>;
   close(): Promise<void>;
 }
 
@@ -122,7 +137,10 @@ export async function createCompanyLookup(
   // page costs one navigation per run rather than one per job referencing it.
   const cache = new Map<string, CompanyAddress[] | null>();
 
-  async function fetchAddresses(companyUrl: string): Promise<CompanyAddress[] | null> {
+  async function fetchAddresses(
+    companyUrl: string,
+    budget?: JobBudget
+  ): Promise<CompanyAddress[] | null> {
     // Only a successful read writes here, so a failing retry can never downgrade
     // an earlier `[]` (page read, company publishes nothing) into null (nothing
     // could be read at all). Those two are different answers downstream, and the
@@ -130,11 +148,20 @@ export async function createCompanyLookup(
     let bestResult: CompanyAddress[] | null = null;
 
     for (let attempt = 0; attempt <= emptyRetries; attempt++) {
+      // A spent budget (or an abort, which reads as no time left) stops the
+      // loop rather than paying for navigations that can only time out. On
+      // the very first attempt that means returning `bestResult`'s initial
+      // null — the same answer a blocked page gives, which is why this can
+      // still promise never to reject.
+      if (budget?.remaining() === 0) break;
       try {
         // Before every navigation, not just the first: this is the whole
         // reason the section keeps being served. See the file header.
         await context.clearCookies();
-        await page.goto(companyUrl, { waitUntil: 'domcontentloaded', timeout: navigationTimeoutMs });
+        await page.goto(companyUrl, {
+          waitUntil: 'domcontentloaded',
+          timeout: budget?.boundedTimeout(navigationTimeoutMs) ?? navigationTimeoutMs
+        });
 
         if (isAuthWall(page.url())) continue;
 
@@ -154,20 +181,27 @@ export async function createCompanyLookup(
   }
 
   return {
-    async addressesFor(companyUrl: string | null): Promise<CompanyAddress[] | null> {
+    async addressesFor(
+      companyUrl: string | null,
+      budget?: JobBudget
+    ): Promise<CompanyAddress[] | null> {
       if (!companyUrl) return null;
 
       const cached = cache.get(companyUrl);
       if (cached !== undefined) return cached;
 
-      const addresses = await fetchAddresses(companyUrl);
+      const addresses = await fetchAddresses(companyUrl, budget);
       const capped =
         addresses && maxAddressesPerCompany !== undefined
           ? addresses.slice(0, maxAddressesPerCompany)
           : addresses;
 
       cache.set(companyUrl, capped);
-      if (delayBetweenLookupsMs > 0) await sleep(delayBetweenLookupsMs);
+      // The politeness delay is worth skipping once the job is out of time:
+      // it exists to space out real network hits, and there are no more of
+      // those coming for this job.
+      if (delayBetweenLookupsMs > 0 && budget?.remaining() !== 0)
+        await sleep(delayBetweenLookupsMs);
       return capped;
     },
 

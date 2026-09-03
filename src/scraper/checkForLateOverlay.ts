@@ -1,4 +1,5 @@
 import type { Page } from 'playwright';
+import type { JobBudget } from '../types';
 import { clearBlockingOverlays } from './clearBlockingOverlays';
 import type { OverlayClearSettings } from './clearBlockingOverlays';
 
@@ -7,14 +8,17 @@ import type { OverlayClearSettings } from './clearBlockingOverlays';
 // the text reads — re-check right before finishing this job so a
 // late-appearing overlay doesn't silently taint the already-read
 // company/description/tags data without being flagged. Returns whether the
-// overlay was still visible at that point.
+// overlay was still visible at that point. `budget` clamps this check's own
+// 3s deadline to what the job has left, so the last step of a job that is
+// already out of time cannot add three more seconds to it.
 export async function checkForLateOverlay(
     page: Page,
     overlayClear?: OverlayClearSettings,
+    budget?: JobBudget,
 ): Promise<boolean> {
     const { stillBlocking, neutralized, dismissed } =
         await clearBlockingOverlays(page, {
-            timeoutMs: 3000,
+            timeoutMs: budget?.boundedTimeout(3000) ?? 3000,
             requiredConsecutiveClear: 2,
             pollIntervalMs: 150,
             ...overlayClear,

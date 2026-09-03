@@ -12,8 +12,16 @@ export interface ScrapeContext {
     delayBetweenJobsMs?: number;
     clickRetryAttempts?: number;
     companyLookup: CompanyLookup;
+    /**
+     * The run's composed abort signal — the caller's own, plus any
+     * `maxRunDurationMs` timer (see `createRunTimeBudget`). Read between jobs
+     * here, and threaded into each job's own budget so it also lands inside
+     * one.
+     */
     signal?: AbortSignal;
     shouldScrapeJob?: ShouldScrapeJob;
+    /** Per-job wall-clock budget; see `ScraperOptions.perJobTimeoutMs`. */
+    perJobTimeoutMs?: number;
     /**
      * The caller's `ScraperOptions.overlayClear` tier policy, carried per job
      * so it reaches the three in-job clear sites and not just the one

@@ -339,6 +339,100 @@ describe('scrapeAllJobsOnce()', () => {
         assert.equal(results[2]?.status, 'success');
     });
 
+    it('keeps the run going when one job blows its per-job time budget — later jobs still scrape', async ({
+        assert,
+    }) => {
+        // The point of a *per-job* budget rather than a run-level abort
+        // (GitHub issue #28): killing the run would throw away every job it
+        // had left, so only the job that is actually stuck is sacrificed.
+        //
+        // Real durations, no mocked clock: a clean job through these fakes
+        // spends ~560ms in the overlay-clear polls alone, so 1200ms clears it
+        // comfortably while the middle job's 1400ms click cannot fit.
+        const jobLocators = [
+            createFakeJobLocator({
+                title: 'Frontend Developer',
+                listCompany: 'Acme',
+                sourceJobId: '111',
+                sourceUrl:
+                    'https://www.linkedin.com/jobs/view/frontend-developer-at-acme-111',
+                companyUrl: 'https://de.linkedin.com/company/acme',
+                location: 'Hamburg',
+                postedAt: '2026-07-21',
+            }),
+            createFakeJobLocator({
+                title: 'Backend Developer',
+                listCompany: 'Acme',
+                sourceJobId: '222',
+                sourceUrl:
+                    'https://www.linkedin.com/jobs/view/backend-developer-at-acme-222',
+                companyUrl: 'https://de.linkedin.com/company/acme',
+                location: 'Hamburg',
+                postedAt: '2026-07-21',
+                onClick: () =>
+                    new Promise<void>((resolve) => setTimeout(resolve, 1400)),
+            }),
+            createFakeJobLocator({
+                title: 'Fullstack Developer',
+                listCompany: 'Acme',
+                sourceJobId: '333',
+                sourceUrl:
+                    'https://www.linkedin.com/jobs/view/fullstack-developer-at-acme-333',
+                companyUrl: 'https://de.linkedin.com/company/acme',
+                location: 'Hamburg',
+                postedAt: '2026-07-21',
+            }),
+        ];
+        const page = createFakePage({
+            locatorsBySelector: {
+                [JOB_LIST_SELECTOR]: createFakeLocator({
+                    nth: (index) => jobLocators[index]!,
+                }),
+                ...baseScrapeJobLocators(() => 'Acme'),
+            },
+            defaultLocator: createFakeLocator({
+                waitFor: () => {},
+                isVisible: () => false,
+            }),
+        });
+        const results: JobResult[] = [];
+        const progressEvents: ScrapeProgressEvent[] = [];
+
+        await scrapeAllJobsOnce(
+            {
+                page,
+                totalJobs: 3,
+                seenSourceJobIds: new Map(),
+                runTimestamp: 123,
+                delayBetweenJobsMs: 0,
+                companyLookup: stubCompanyLookup(),
+                perJobTimeoutMs: 1200,
+                onProgress: (e) => progressEvents.push(e),
+            },
+            results,
+        );
+
+        assert.equal(results.length, 3);
+        assert.equal(results[0]?.status, 'success');
+        const middle = results[1]!;
+        assertFailed(middle);
+        assert.equal(
+            middle.error,
+            'Job exceeded per-job time budget of 1200ms',
+        );
+        // Still identifiable, and still an ordinary job:done — a timed-out job
+        // is a failed job, not a missing one.
+        assert.equal(middle.title, 'Backend Developer');
+        assert.equal(middle.sourceJobId, '222');
+        assert.equal(results[2]?.status, 'success');
+        assert.deepEqual(
+            progressEvents
+                .filter((e) => e.type === 'job:done')
+                .map((e) => e.result.index),
+            [0, 1, 2],
+        );
+    });
+
     it('stops scraping remaining jobs once the signal is aborted mid-run', async ({
         assert,
     }) => {

@@ -29,6 +29,8 @@ export {
     isSourceJobIdMismatch,
     isStaleResult,
     clampTotalJobs,
+    createJobBudget,
+    createRunTimeBudget,
 } from './scraper';
 export type {
     ScrapeContext,

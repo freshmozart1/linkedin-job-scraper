@@ -1,4 +1,5 @@
 import type { Locator, Page } from 'playwright';
+import type { JobBudget } from '../types';
 import { jobIdFromUrl } from '../url';
 import {
     JOB_LINK_SELECTOR,
@@ -27,17 +28,25 @@ export interface JobListIdentity {
 // visible on the object the caller already holds. That's what lets
 // scrapeJob's catch block return a partial identity instead of losing it
 // along with the rest of a failed job.
+//
+// `budget` is the job's own wall-clock budget, passed to every read below so
+// seven stacked 1000ms reads can't run on past a deadline that has already
+// gone (see JobBudget).
 export async function readJobListIdentity(
     jobItem: Locator,
     page: Page,
     identity: JobListIdentity,
+    budget?: JobBudget,
 ): Promise<void> {
-    identity.title = await trim<string>(jobItem, 'h3');
+    identity.title = await trim<string>(jobItem, 'h3', { budget });
     if (!identity.title)
         throw new Error(
             'No job title found for this list item - LinkedIn markup has likely changed',
         );
-    const jobHref = await trim(jobItem, JOB_LINK_SELECTOR, { attr: 'href' });
+    const jobHref = await trim(jobItem, JOB_LINK_SELECTOR, {
+        attr: 'href',
+        budget,
+    });
     if (!jobHref) throw new Error('No job href found for this list item');
     const jobUrl = new URL(jobHref, page.url());
     if (!jobUrl.hostname)
@@ -48,6 +57,7 @@ export async function readJobListIdentity(
     identity.sourceUrl = jobUrl.toString();
     const entityUrn = await trim<string>(jobItem, '.base-card', {
         attr: 'data-entity-urn',
+        budget,
     });
     identity.sourceJobId =
         entityUrn.match(/jobPosting:(\d+)$/)?.[1] ??
@@ -59,6 +69,7 @@ export async function readJobListIdentity(
         );
     const companyHref = await trim(jobItem, LIST_COMPANY_LINK_SELECTOR, {
         attr: 'href',
+        budget,
     });
     if (!companyHref) throw new Error('No company href found for list item');
     const companyUrlObj = new URL(companyHref, page.url());
@@ -67,10 +78,13 @@ export async function readJobListIdentity(
     companyUrlObj.search = '';
     companyUrlObj.hash = '';
     identity.companyUrl = companyUrlObj.toString();
-    identity.location = await trim(jobItem, LIST_LOCATION_SELECTOR);
+    identity.location = await trim(jobItem, LIST_LOCATION_SELECTOR, {
+        budget,
+    });
     if (!identity.location) throw new Error('No location found for list item');
     identity.postedAt = await trim(jobItem, LIST_POSTED_AT_SELECTOR, {
         attr: 'datetime',
+        budget,
     });
     if (!identity.postedAt)
         throw new Error('No posted date found for list item');
