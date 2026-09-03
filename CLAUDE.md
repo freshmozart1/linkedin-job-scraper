@@ -51,7 +51,7 @@ LinkedIn's guest pages block clicks behind `.modal__overlay--visible` (cookie co
 
 The overlay selector stays narrow (`.modal__overlay--visible`) on purpose — a broader `[role="dialog"]`/`[role="alert"]` also matches always-visible accessibility live-regions earlier in the DOM, which made `.first()` pick the wrong element.
 
-A clear escalates cheapest-first rather than repeating one blind click (GitHub issue #27, where an interstitial whose only close control was an icon-only `×` matched nothing, and each round's `click({timeout: 2000})` against a zero-match locator burned the full 2s before throwing). Per round against a still-visible overlay: `readOverlayDiagnostics` reads text, classes and every control's accessible name in one `page.evaluate`; `pickDismissButtonIndex` picks a control off those names — a dismiss-named one, else an unnamed (icon-only) one, else anything that isn't *Sign in*/*Join now*, else nothing, because navigating off the search page is worse than the overlay; then `Escape`; and once `maxDismissAttempts` rounds have failed, `neutralizeOverlay` strips the `--visible` modifier and forces `pointer-events: none` **and** `visibility: hidden`. Both inline styles are needed — `findVisibleOverlay` asks Playwright `isVisible()`, which reports a `pointer-events: none` element as perfectly visible, so forcing only pointer-events would leave every caller reading `stillBlocking: true` against a page that is actually clickable.
+A clear escalates cheapest-first rather than repeating one blind click (GitHub issue #27, where a `.modal__overlay--visible` intercepted every click at the job list and nothing in this function could get rid of it — one name-matched click attempt, and no fallback at all behind it). Per round against a still-visible overlay: `readOverlayDiagnostics` reads text, classes and every control's accessible name in one `page.evaluate`; `pickDismissButtonIndex` picks a control off those names — a dismiss-named one, else an unnamed (icon-only) one, else anything that isn't *Sign in*/*Join now*, else nothing, because navigating off the search page is worse than the overlay; then `Escape`; and once `maxDismissAttempts` rounds have failed, `neutralizeOverlay` strips the `--visible` modifier and forces `pointer-events: none` **and** `visibility: hidden`. Both inline styles are needed — `findVisibleOverlay` asks Playwright `isVisible()`, which reports a `pointer-events: none` element as perfectly visible, so forcing only pointer-events would leave every caller reading `stillBlocking: true` against a page that is actually clickable.
 
 Every per-click timeout is clamped by `boundedBy(deadline, cap, roundsLeft)`, which divides the *remaining* budget by the rounds still allowed plus one. Both escalation triggers are only evaluated at the top of a round, so without that reserve a round can overshoot the deadline and take the neutralize tier down with it — at `checkForLateOverlay`'s 3000ms two full-cost rounds end past the deadline with `failedRounds` only just reaching `maxDismissAttempts`, and the round that would have neutralized never runs.
 
@@ -184,3 +184,22 @@ mid-run. No offline test can catch a DOM state that only exists after a
 real browser has already scrolled a real page. The fix is to hide the
 element unconditionally (drop `.show` from the selector) — a `display:
 none` set before the class is ever added still holds once it is.
+
+The same method verified the overlay ladder (GitHub issue #27), and the
+useful part there was the **hit test**, not the screenshot: with a
+`.modal__overlay--visible` armed, `document.elementFromPoint()` at a job
+card's centre returns the overlay itself (`interceptedByOverlay: true`,
+`jobCardReachable: false`) — the DOM-side reading of the same
+`subtree intercepts pointer events` Playwright reports — and after
+`neutralizeOverlay`'s exact body runs, that hit test returns the card's own
+`base-card__full-link`. Running each tier against the live page is also
+what established two facts no offline test could: the overlay is LinkedIn's
+`modal--contextual-sign-in` sign-in wall (five of them sit in the DOM at
+once, exactly one carrying `--visible`), and its close control is named
+`Dismiss` on a `de` guest session — i.e. the widened name pattern is
+insurance for other locales, and it is the neutralize tier that carries the
+fix. Note the armed overlay computes to `opacity: 0` with
+`pointer-events: auto`: invisible to the eye while intercepting every
+click, and reported by Playwright's `isVisible()` as perfectly visible,
+which is why neutralizing forces `visibility: hidden` rather than trusting
+`pointer-events` alone.

@@ -43,12 +43,21 @@ export type OverlayClearSettings = Pick<
 // GitHub issue #27: a `.modal__overlay--visible` inside
 // `div.top-level-modal-container` intercepted every click at the job list,
 // and this function never dismissed it. It only ever clicked
-// `getByRole('button', {name: /reject|dismiss|accept/i})`, which matched
-// nothing on an interstitial whose close control is an icon-only `×` — and
-// a `click({timeout: 2000})` against a zero-match locator waits the FULL
-// timeout before throwing, so each round burned 2s achieving nothing. The
-// caller then retried into the same wall until its own budget ran out, and
-// the job failed after tens of seconds. That repeated for job after job.
+// `getByRole('button', {name: /reject|dismiss|accept/i})` — one attempt,
+// with nothing behind it: no Escape, no second control, and no way to take
+// an overlay out of the way that refused to close. The caller retried into
+// the same wall until its own budget ran out, and the job failed after tens
+// of seconds. That repeated for job after job.
+//
+// Verified live (CLAUDE.md's Testing section) that the overlay is LinkedIn's
+// `modal--contextual-sign-in` sign-in wall, and that on a `de` guest session
+// its close control *is* named `Dismiss` — which the old pattern would have
+// matched. So the widened name pattern below is insurance for locales that
+// name it otherwise, not the confirmed root cause; the rung that actually
+// rescues the documented failure is tier 4. Measured on the live page, an
+// armed overlay makes `elementFromPoint` at a job card's centre return the
+// overlay itself, and neutralizing it hands that hit test back to the card's
+// own `base-card__full-link`.
 //
 // The ladder, per round, against a still-visible overlay:
 //
