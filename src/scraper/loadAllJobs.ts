@@ -4,6 +4,7 @@ import { SEE_MORE_BUTTON_SELECTOR } from '../selectors';
 import { scrollLoadPhase } from './scrollLoadPhase';
 import { clickLoadPhase } from './clickLoadPhase';
 import { collectJobIds } from './collectJobIds';
+import { toOverlayClearSettings } from './toOverlayClearSettings';
 
 export async function loadAllJobs(
     page: Page,
@@ -22,6 +23,7 @@ export async function loadAllJobs(
         maxSeeMoreClicks: scraperOptions?.maxSeeMoreClicks,
         stableClicksToStop: scraperOptions?.stableClicksToStop,
         clickRetryAttempts: scraperOptions?.clickRetryAttempts,
+        overlayClear: toOverlayClearSettings(scraperOptions),
         onProgress,
         signal,
     });

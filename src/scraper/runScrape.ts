@@ -5,6 +5,7 @@ import { buildSearchUrl } from '../url';
 import { createCompanyLookup } from '../companyLookup';
 import type { ScrapeContext } from './scrapeContext';
 import { clearBlockingOverlays } from './clearBlockingOverlays';
+import { toOverlayClearSettings } from './toOverlayClearSettings';
 import { loadAllJobs } from './loadAllJobs';
 import { clampTotalJobs } from './clampTotalJobs';
 import { scrapeAllJobsOnce } from './scrapeAllJobsOnce';
@@ -27,7 +28,8 @@ export const runScrape: RunScraper = async ({
     // Checked before the browser even launches so an already-aborted signal never
     // pays for one — nothing to clean up yet, so this stays outside the try/finally
     // below for the same reason a failing `launch` does.
-    if (signal?.aborted) throw new ScrapeAbortedError({ results, url: searchUrl });
+    if (signal?.aborted)
+        throw new ScrapeAbortedError({ results, url: searchUrl });
 
     const browser = await chromium.launch({
         headless: scraperOptions?.headless ?? false,
@@ -56,6 +58,11 @@ export const runScrape: RunScraper = async ({
             requiredConsecutiveClear:
                 scraperOptions?.overlayClear?.requiredConsecutiveClear ?? 5,
             pollIntervalMs: scraperOptions?.overlayClear?.pollIntervalMs ?? 300,
+            maxDismissAttempts:
+                scraperOptions?.overlayClear?.maxDismissAttempts ?? 2,
+            neutralizeStuckOverlay:
+                scraperOptions?.overlayClear?.neutralizeStuckOverlay ?? true,
+            onProgress,
         });
 
         const discoveredJobs = await loadAllJobs(
@@ -66,7 +73,10 @@ export const runScrape: RunScraper = async ({
         );
         if (signal?.aborted)
             throw new ScrapeAbortedError({ results, url: searchUrl });
-        const totalJobs = clampTotalJobs(discoveredJobs, scraperOptions?.maxJobs);
+        const totalJobs = clampTotalJobs(
+            discoveredJobs,
+            scraperOptions?.maxJobs,
+        );
         onProgress?.({ type: 'jobs:found', total: totalJobs });
 
         const ctx: ScrapeContext = {
@@ -80,6 +90,9 @@ export const runScrape: RunScraper = async ({
             companyLookup,
             signal,
             shouldScrapeJob: scraperOptions?.shouldScrapeJob,
+            // Carried per job so `neutralizeStuckOverlay` / `maxDismissAttempts`
+            // reach the three in-job clear sites too, not just the clear above.
+            overlayClear: toOverlayClearSettings(scraperOptions),
         };
 
         const staleIndices = await scrapeAllJobsOnce(ctx, results);

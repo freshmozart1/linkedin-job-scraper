@@ -260,13 +260,91 @@ export interface JobStaleEvent {
     type: 'job:stale';
     result: JobResult;
 }
+/**
+ * Everything `readOverlayDiagnostics` can see about a blocking overlay, read
+ * in a single `page.evaluate`.
+ *
+ * This exists because GitHub issue #27 could not be diagnosed from the
+ * outside: an overlay sat over the job list and swallowed every click, but
+ * the run happened in an untouched automated browser, so nobody ever read
+ * what the overlay actually *said*. "Probably a sign-in wall" stayed an
+ * inference. These three fields are what turns that inference into a fact
+ * on the next occurrence — without a human watching the run.
+ */
+export interface OverlayDiagnostics {
+    /**
+     * The overlay's own text with all whitespace collapsed to single spaces
+     * and the result length-capped, so one runaway node can't bloat a
+     * progress event or an error message. Read via `textContent`, not
+     * `innerText`: an overlay whose base classes still say `invisible`
+     * reports an empty `innerText` even while it is intercepting clicks.
+     */
+    text: string;
+    /**
+     * The overlay element's full class list in DOM order. The whole point of
+     * issue #27 was that the base classes (`opacity-0 invisible
+     * pointer-events-none`) are overridden at runtime by a `--visible`
+     * modifier, so the class list is the direct evidence of which overlay
+     * variant was on screen.
+     */
+    classes: string[];
+    /**
+     * The accessible name of each control matched by
+     * `OVERLAY_BUTTON_SELECTOR` inside the overlay, in DOM order:
+     * a non-empty `aria-label` when present, otherwise the trimmed text.
+     * `''` for the classic icon-only close control, which is precisely the
+     * case the old name-matched click could never reach.
+     */
+    buttonNames: string[];
+}
+/**
+ * Emitted once per `clearBlockingOverlays` call that had to escalate past
+ * the button-click and `Escape` tiers — i.e. the overlay had to be forcibly
+ * neutralized, or it was *still* visible when the call returned.
+ *
+ * Deliberately not emitted on the ordinary path where a click or `Escape`
+ * dismissed the overlay: that is normal LinkedIn behavior on every guest
+ * page load and would drown the signal. Consumers that only handle
+ * `job:done` are unaffected — this is an additional union member, not a
+ * change to an existing one.
+ */
+export interface OverlayUndismissedEvent {
+    type: 'overlay:undismissed';
+    /** Whether the `--visible` modifier was stripped to force the overlay out of the way. `false` means it is still blocking. */
+    neutralized: boolean;
+    /** What the overlay was; `null` only when the diagnostics read itself failed. */
+    diagnostics: OverlayDiagnostics | null;
+}
 /** Progress callback payloads emitted while a scrape is running. */
 export type ScrapeProgressEvent =
     | JobsLoadingEvent
     | JobsFoundEvent
     | JobStartEvent
     | JobDoneEvent
-    | JobStaleEvent;
+    | JobStaleEvent
+    | OverlayUndismissedEvent;
+
+/**
+ * What `clearBlockingOverlays` managed to do about the overlays it found.
+ *
+ * Replaces the single `boolean` it used to return, which conflated "an
+ * overlay was dismissed" with "the page is clickable now" and left callers
+ * re-querying the page themselves to tell the two apart (GitHub issue #27).
+ */
+export interface OverlayClearResult {
+    /** An overlay was found and a button click or `Escape` made it go away. */
+    dismissed: boolean;
+    /** Nothing dismissed an overlay, so its `--visible` modifier was stripped and `pointer-events: none` forced on it. */
+    neutralized: boolean;
+    /**
+     * An overlay is *still* visible as this returns. This — not
+     * `!dismissed` — is the "the next click cannot land" answer, and it is
+     * why callers no longer need their own follow-up `findVisibleOverlay`.
+     */
+    stillBlocking: boolean;
+    /** Set whenever `neutralized` or `stillBlocking` is true; `null` on a clean dismissal or when the read itself failed. */
+    diagnostics: OverlayDiagnostics | null;
+}
 
 export interface ScrapeOutcome {
     results: JobResult[];
@@ -365,6 +443,24 @@ export interface ScraperOptions {
         timeoutMs?: number;
         pollIntervalMs?: number;
         requiredConsecutiveClear?: number;
+        /**
+         * How many rounds of "click the best control, then press `Escape`"
+         * may fail against a still-visible overlay before it is neutralized
+         * outright. Default `2`. Raising it trades a longer stall for more
+         * chances at a genuine dismissal; `0` neutralizes on the first
+         * round without ever clicking.
+         */
+        maxDismissAttempts?: number;
+        /**
+         * Whether the last-resort DOM mutation is allowed at all: stripping
+         * the overlay's `--visible` modifier (which restores its own base
+         * `opacity-0 invisible pointer-events-none` classes) and forcing
+         * inline `pointer-events: none`. Default `true`, because the
+         * alternative observed in GitHub issue #27 was every subsequent job
+         * click failing against an overlay nothing could close. Set `false`
+         * to keep the page untouched and accept `stillBlocking` instead.
+         */
+        neutralizeStuckOverlay?: boolean;
     };
     /** Timings and limits for the company-page address lookup; see `createCompanyLookup`. */
     companyLookup?: {

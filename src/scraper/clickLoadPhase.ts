@@ -2,6 +2,7 @@ import type { Page, Locator } from 'playwright';
 import type { ScrapeProgressEvent } from '../types';
 import { VIEWED_ALL_JOBS_SELECTOR } from '../selectors';
 import { clickWithOverlayRetries } from './clickWithOverlayRetries';
+import type { OverlayClearSettings } from './clearBlockingOverlays';
 import { pollForNewJobs } from './pollForNewJobs';
 
 export interface ClickLoadPhaseOptions {
@@ -9,6 +10,8 @@ export interface ClickLoadPhaseOptions {
     stableClicksToStop?: number;
     clickRetryAttempts?: number;
     onProgress?: (event: ScrapeProgressEvent) => void;
+    /** The caller's overlay tier policy, so a clear during this phase obeys it too; see OverlayClearSettings. */
+    overlayClear?: Omit<OverlayClearSettings, 'onProgress'>;
     signal?: AbortSignal;
 }
 
@@ -31,6 +34,7 @@ export async function clickLoadPhase(
         stableClicksToStop = 3,
         clickRetryAttempts,
         onProgress,
+        overlayClear,
         signal,
     } = options;
     const viewedAllBanner = page.locator(VIEWED_ALL_JOBS_SELECTOR);
@@ -43,7 +47,10 @@ export async function clickLoadPhase(
         if (!(await seeMoreButton.isVisible().catch(() => false))) break;
 
         const beforeClickCount = previousUniqueCount;
-        await clickWithOverlayRetries(seeMoreButton, page, clickRetryAttempts);
+        await clickWithOverlayRetries(seeMoreButton, page, clickRetryAttempts, {
+            ...overlayClear,
+            onProgress,
+        });
         const currentUniqueCount = await pollForNewJobs(
             page,
             beforeClickCount,

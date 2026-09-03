@@ -11,6 +11,7 @@ import { registerJobOccurrence } from './registerJobOccurrence';
 import { buildSkippedResult } from './buildSkippedResult';
 import { sleep } from './sleep';
 import { clickWithOverlayRetries } from './clickWithOverlayRetries';
+import type { OverlayClearSettings } from './clearBlockingOverlays';
 import { dismissOverlayAfterClick } from './dismissOverlayAfterClick';
 import { waitForJobDetailToLoad } from './waitForJobDetailToLoad';
 import { readJobDetailPane } from './readJobDetailPane';
@@ -23,6 +24,15 @@ export interface ScrapeJobOptions {
     clickRetryAttempts?: number;
     companyLookup: CompanyLookup;
     shouldScrapeJob?: ShouldScrapeJob;
+    /**
+     * Passed straight through to the three overlay helpers below, which are
+     * otherwise the only part of a job's scrape with no route back to the
+     * run's progress stream — nor to the caller's `ScraperOptions.overlayClear`
+     * tier policy, which would otherwise apply only to the single clear
+     * `runScrape` does after `page.goto`. Nothing here emits a job-level event
+     * of its own — that stays scrapeJobAndRecord's job.
+     */
+    overlayClear?: OverlayClearSettings;
 }
 
 export async function scrapeJob(
@@ -102,8 +112,9 @@ export async function scrapeJob(
             jobItem,
             page,
             options.clickRetryAttempts,
+            options.overlayClear,
         );
-        await dismissOverlayAfterClick(page);
+        await dismissOverlayAfterClick(page, options.overlayClear);
         await waitForJobDetailToLoad(page, sourceJobId);
         const {
             company,
@@ -111,7 +122,12 @@ export async function scrapeJob(
             companyMismatch,
             sourceJobIdMismatch,
             lateOverlayDetected,
-        } = await readJobDetailPane(jobItem, page, sourceJobId);
+        } = await readJobDetailPane(
+            jobItem,
+            page,
+            sourceJobId,
+            options.overlayClear,
+        );
 
         // Deliberately after readJobDetailPane's checkForLateOverlay: that check
         // has to stay tight against the company/description reads it validates,

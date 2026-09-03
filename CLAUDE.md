@@ -14,7 +14,7 @@ This scrapes an unofficial, moving surface — LinkedIn's markup and anti-bot ga
 
 ```bash
 npm run build       # tsc -p tsconfig.json -> dist/ (JS + .d.ts + sourcemaps)
-npm test            # node --import tsx --test "test/*.test.ts"  (101 tests, no browser)
+npm test            # node --import tsx --test "test/*.test.ts"  (158 tests, no browser)
 npm run typecheck   # tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json
 
 # single test file / single test by name:
@@ -51,9 +51,17 @@ LinkedIn's guest pages block clicks behind `.modal__overlay--visible` (cookie co
 
 The overlay selector stays narrow (`.modal__overlay--visible`) on purpose — a broader `[role="dialog"]`/`[role="alert"]` also matches always-visible accessibility live-regions earlier in the DOM, which made `.first()` pick the wrong element.
 
+A clear escalates cheapest-first rather than repeating one blind click (GitHub issue #27, where a `.modal__overlay--visible` intercepted every click at the job list and nothing in this function could get rid of it — one name-matched click attempt, and no fallback at all behind it). Per round against a still-visible overlay: `readOverlayDiagnostics` reads text, classes and every control's accessible name in one `page.evaluate`; `pickDismissButtonIndex` picks a control off those names — a dismiss-named one, else an unnamed (icon-only) one, else anything that isn't *Sign in*/*Join now*, else nothing, because navigating off the search page is worse than the overlay; then `Escape`; and once `maxDismissAttempts` rounds have failed, `neutralizeOverlay` strips the `--visible` modifier and forces `pointer-events: none` **and** `visibility: hidden`. Both inline styles are needed — `findVisibleOverlay` asks Playwright `isVisible()`, which reports a `pointer-events: none` element as perfectly visible, so forcing only pointer-events would leave every caller reading `stillBlocking: true` against a page that is actually clickable.
+
+Every per-click timeout is clamped by `boundedBy(deadline, cap, roundsLeft)`, which divides the *remaining* budget by the rounds still allowed plus one. Both escalation triggers are only evaluated at the top of a round, so without that reserve a round can overshoot the deadline and take the neutralize tier down with it — at `checkForLateOverlay`'s 3000ms two full-cost rounds end past the deadline with `failedRounds` only just reaching `maxDismissAttempts`, and the round that would have neutralized never runs.
+
+`clearBlockingOverlays` returns an `OverlayClearResult`, not a boolean: `stillBlocking` (not `!dismissed`) is the "the next click cannot land" answer, so callers no longer re-query the page themselves. `ScraperOptions.overlayClear`'s two tier-policy fields (`maxDismissAttempts`, `neutralizeStuckOverlay`) are threaded to *every* clear site via `OverlayClearSettings` — through `ScrapeContext` for the in-job clears and `ClickLoadPhaseOptions` for the load phase — since applying them only to `runScrape`'s own clear would mutate the DOM on every job for a caller who asked for `neutralizeStuckOverlay: false`. The timings stay per-site: each clear has its own budget for its own point in the job.
+
+The ladder is spread over five files, and the split lines are not arbitrary. `clearBlockingOverlays.ts` keeps only the poll-and-escalate state machine, whose branches share six pieces of loop-carried state and read top-to-bottom. `clickOverlayDismissControl.ts` owns the dismiss-click tier *and* `boundedBy` with the two caps it clamps (`MAX_DISMISS_CLICK_MS`, `MAX_HIDDEN_WAIT_MS`) — nothing else uses them, so the whole budget-clamping concern moves out whole rather than making every reader of the ladder wade through it. It takes `diagnostics` as a non-nullable parameter on purpose: `pickDismissButtonIndex` returns a *positional* index, so a retained read from an earlier round can describe a modal that is no longer the first match and send the click into the new one's *Sign in* — a caller with nothing fresh to pass has nothing to click and must not call it. `toOverlayClearSettings.ts` is the `ScraperOptions` → `OverlayClearSettings` narrowing; it is a function rather than a spread because `runScrape` and `loadAllJobs` both need it and were each spelling the two fields out by hand, so a third tier option would have had to be remembered in both — and a spread of the caller's whole `overlayClear` would carry the timing fields too, overwriting each site's own budget with one chosen for a different site. `describeOverlayDiagnostics.ts` renders the diagnostics to one length-capped line; it is public because that exact string is what a blocked job's `error` carries, and a consumer handling `overlay:undismissed` should not have to re-derive the format. `readOverlayDiagnostics.ts` and `neutralizeOverlay.ts` stay internal — they are `page.evaluate` bodies, untestable without a browser and useless outside the ladder.
+
 ### Staleness and the single retry pass
 
-LinkedIn's detail pane sometimes doesn't re-render when cards are clicked quickly: the title link is supposed to update first, but the rest of the pane — and sometimes even the title link itself — is left over from the previous job. Three flags catch this per job — `companyMismatch` (list-pane company vs. detail-pane company disagree), `sourceJobIdMismatch` (the detail pane's own title-link href carries a different job ID than the clicked job's `sourceJobId`), and `lateOverlayDetected` (an overlay was visible right when data was read). `isStaleResult()` folds all three into one predicate, and it excludes `status: 'failed'` implicitly because the catch block forces all three flags false on failure.
+LinkedIn's detail pane sometimes doesn't re-render when cards are clicked quickly: the title link is supposed to update first, but the rest of the pane — and sometimes even the title link itself — is left over from the previous job. Three flags catch this per job — `companyMismatch` (list-pane company vs. detail-pane company disagree), `sourceJobIdMismatch` (the detail pane's own title-link href carries a different job ID than the clicked job's `sourceJobId`), and `lateOverlayDetected` (an overlay was visible right when data was read). `checkForLateOverlay` returns `stillBlocking || neutralized || dismissed` — *finding* an overlay in that window is the signal, and how it was eventually got rid of is beside the point. Reading only `stillBlocking` would make the flag go dead exactly as the escalation ladder got better at its job, silently costing those jobs their retry while keeping the tainted read. `isStaleResult()` folds all three into one predicate, and it excludes `status: 'failed'` implicitly because the catch block forces all three flags false on failure.
 
 `companyMismatch` only compares company text, so on its own it has a blind spot: a pane left over from an *earlier posting at the same company* reads as a match and would never be flagged by it alone. `sourceJobIdMismatch` closes that gap (GitHub issue #17) — the detail pane's title link (`DETAIL_TITLE_LINK_SELECTOR`, matched by `waitForJobDetailToLoad`'s wait too) turned out to carry a real, verified-live per-posting job-ID marker: its `href` is the rendered posting's own canonical job URL, e.g. `.../jobs/view/frontend-entwickler-m-w-d-at-cpu-softwarehouse-ag-4442367237?trk=public_jobs_topcard-title`, confirmed to update correctly across two different postings from the same real company. `isSourceJobIdMismatch` (`src/scraper/isSourceJobIdMismatch.ts`) recovers that ID with the same `normalizeJobUrl` + `jobIdFromUrl` pipeline `readJobListIdentity` already uses for the list card's own href, and compares it against `sourceJobId`. It fails open (`false`) whenever the href can't be read or parsed, matching `isCompanyMismatch`'s own null-guard style, since `waitForJobDetailToLoad`'s wait for that same href is itself best-effort and silently gives up on timeout.
 
@@ -75,7 +83,7 @@ Stale jobs get **exactly one** retry, deferred until the whole list has been scr
 
 ### Progress events
 
-`onProgress` receives a `ScrapeProgressEvent` union: `jobs:loading` (unique count grew during loading), `jobs:found` (loading done, total about to be scraped), `job:start`, and then **either** `job:done` **or** `job:stale` per job — never both. A retry re-emits for the same index.
+`onProgress` receives a `ScrapeProgressEvent` union: `jobs:loading` (unique count grew during loading), `jobs:found` (loading done, total about to be scraped), `job:start`, and then **either** `job:done` **or** `job:stale` per job — never both. A retry re-emits for the same index. `overlay:undismissed` is the one member not tied to a job index — it fires from any clear site that had to neutralize an overlay or gave up on one, carries the `OverlayDiagnostics` read off it, and is deliberately silent on the ordinary path where a click or `Escape` closed the overlay (which happens on virtually every guest page load).
 
 ### `maxJobs` caps the scrape, not the load
 
@@ -176,3 +184,22 @@ mid-run. No offline test can catch a DOM state that only exists after a
 real browser has already scrolled a real page. The fix is to hide the
 element unconditionally (drop `.show` from the selector) — a `display:
 none` set before the class is ever added still holds once it is.
+
+The same method verified the overlay ladder (GitHub issue #27), and the
+useful part there was the **hit test**, not the screenshot: with a
+`.modal__overlay--visible` armed, `document.elementFromPoint()` at a job
+card's centre returns the overlay itself (`interceptedByOverlay: true`,
+`jobCardReachable: false`) — the DOM-side reading of the same
+`subtree intercepts pointer events` Playwright reports — and after
+`neutralizeOverlay`'s exact body runs, that hit test returns the card's own
+`base-card__full-link`. Running each tier against the live page is also
+what established two facts no offline test could: the overlay is LinkedIn's
+`modal--contextual-sign-in` sign-in wall (five of them sit in the DOM at
+once, exactly one carrying `--visible`), and its close control is named
+`Dismiss` on a `de` guest session — i.e. the widened name pattern is
+insurance for other locales, and it is the neutralize tier that carries the
+fix. Note the armed overlay computes to `opacity: 0` with
+`pointer-events: auto`: invisible to the eye while intercepting every
+click, and reported by Playwright's `isVisible()` as perfectly visible,
+which is why neutralizing forces `visibility: hidden` rather than trusting
+`pointer-events` alone.

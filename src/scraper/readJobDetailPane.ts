@@ -9,6 +9,7 @@ import { trim } from './trim';
 import { isCompanyMismatch } from './isCompanyMismatch';
 import { isSourceJobIdMismatch } from './isSourceJobIdMismatch';
 import { checkForLateOverlay } from './checkForLateOverlay';
+import type { OverlayClearSettings } from './clearBlockingOverlays';
 
 interface JobDetailPane {
     company: string;
@@ -27,6 +28,7 @@ export async function readJobDetailPane(
     jobItem: Locator,
     page: Page,
     sourceJobId: string | null,
+    overlayClear?: OverlayClearSettings,
 ): Promise<JobDetailPane> {
     const company = await trim<string>(jobItem, COMPANY_SELECTOR, { page });
     if (!company) throw new Error('No company in detail pane for job');
@@ -49,7 +51,7 @@ export async function readJobDetailPane(
         detailTitleHref,
         baseUrl: page.url(),
     });
-    const lateOverlayDetected = await checkForLateOverlay(page);
+    const lateOverlayDetected = await checkForLateOverlay(page, overlayClear);
     return {
         company,
         descriptionText,
