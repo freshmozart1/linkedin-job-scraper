@@ -5,6 +5,7 @@ import { buildSearchUrl } from '../url';
 import { createCompanyLookup } from '../companyLookup';
 import type { ScrapeContext } from './scrapeContext';
 import { clearBlockingOverlays } from './clearBlockingOverlays';
+import { toOverlayClearSettings } from './toOverlayClearSettings';
 import { loadAllJobs } from './loadAllJobs';
 import { clampTotalJobs } from './clampTotalJobs';
 import { scrapeAllJobsOnce } from './scrapeAllJobsOnce';
@@ -91,12 +92,7 @@ export const runScrape: RunScraper = async ({
             shouldScrapeJob: scraperOptions?.shouldScrapeJob,
             // Carried per job so `neutralizeStuckOverlay` / `maxDismissAttempts`
             // reach the three in-job clear sites too, not just the clear above.
-            overlayClear: {
-                maxDismissAttempts:
-                    scraperOptions?.overlayClear?.maxDismissAttempts,
-                neutralizeStuckOverlay:
-                    scraperOptions?.overlayClear?.neutralizeStuckOverlay,
-            },
+            overlayClear: toOverlayClearSettings(scraperOptions),
         };
 
         const staleIndices = await scrapeAllJobsOnce(ctx, results);

@@ -4,10 +4,9 @@ import type {
     OverlayDiagnostics,
     ScrapeProgressEvent,
 } from '../types';
-import { OVERLAY_BUTTON_SELECTOR } from '../selectors';
 import { findVisibleOverlay } from './findVisibleOverlay';
 import { readOverlayDiagnostics } from './readOverlayDiagnostics';
-import { pickDismissButtonIndex } from './pickDismissButtonIndex';
+import { clickOverlayDismissControl } from './clickOverlayDismissControl';
 import { neutralizeOverlay } from './neutralizeOverlay';
 import { sleep } from './sleep';
 
@@ -38,44 +37,6 @@ export type OverlayClearSettings = Pick<
     'maxDismissAttempts' | 'neutralizeStuckOverlay' | 'onProgress'
 >;
 
-/**
- * Longest a single dismiss click may block. Deliberately much shorter than
- * the old 2s: `checkForLateOverlay` gives this whole function only 3000ms,
- * so a click allowed to eat 2s of that leaves no budget to escalate to
- * Escape, let alone to neutralizing. Clamped against the remaining budget
- * for the same reason.
- */
-const MAX_DISMISS_CLICK_MS = 1000;
-
-/**
- * Longest to wait for a clicked overlay to actually disappear. Also far
- * below the old 3000ms, and for the same budget reason — a modal's close
- * transition is a few hundred milliseconds, and if it hasn't gone by then
- * the next round re-reads it anyway.
- */
-const MAX_HIDDEN_WAIT_MS = 500;
-
-/**
- * A Playwright timeout that can never outlive this call's own deadline, and
- * that can never eat the budget the tiers below it still need.
- *
- * Clamping against the deadline alone is not enough. Both escalation triggers
- * are only evaluated at the *top* of a round, so a round that overshoots the
- * deadline takes the whole ladder down with it: at `checkForLateOverlay`'s
- * 3000ms, two rounds of `MAX_DISMISS_CLICK_MS + MAX_HIDDEN_WAIT_MS + poll`
- * (~1700ms each) end past the deadline with `failedRounds` only just reaching
- * `maxDismissAttempts`, so the round that would have neutralized never runs —
- * the ladder's last rung was unreachable for that caller. `roundsLeft` is how
- * many dismiss rounds may still run, and the `+ 1` reserves a share for the
- * neutralize round that has to follow them.
- *
- * Never returns 0: Playwright reads 0 as "no timeout at all".
- */
-function boundedBy(deadline: number, cap: number, roundsLeft: number): number {
-    const share = (deadline - Date.now()) / (roundsLeft + 1);
-    return Math.max(1, Math.floor(Math.min(cap, share)));
-}
-
 // Clears whatever is blocking clicks on the page, escalating cheapest-first
 // instead of repeating one blind click.
 //
@@ -95,7 +56,8 @@ function boundedBy(deadline: number, cap: number, roundsLeft: number): number {
 //      replaces the blind click: the control is now chosen from names
 //      already in hand, and the same read is the diagnostics the issue asks
 //      for.
-//   2. Click the best control, chosen by pickDismissButtonIndex, which
+//   2. Click the best control (clickOverlayDismissControl, which owns this
+//      tier's timeout clamping), chosen by pickDismissButtonIndex, which
 //      refuses to click Sign in / Join now (navigating off the search page
 //      is worse than the overlay).
 //   3. Press Escape — when no control was pickable at all, and also when
@@ -180,42 +142,26 @@ export async function clearBlockingOverlays(
             continue;
         }
 
-        // `read`, never the retained `diagnostics`: the index is positional,
-        // so it only addresses the intended control when the names came from
-        // *this* round's read of *this* overlay. A retained read can describe
-        // a modal that is no longer the first match, and its index could then
-        // land on the new one's Sign in / Join now — the one click this whole
-        // picker exists to avoid.
+        // `read`, never the retained `diagnostics`: the index the tier picks
+        // is positional, so it only addresses the intended control when the
+        // names came from *this* round's read of *this* overlay. A retained
+        // read can describe a modal that is no longer the first match, and its
+        // index could then land on the new one's Sign in / Join now — the one
+        // click the picker exists to avoid. So an escalating round, which
+        // holds only a retained read, skips this tier entirely.
         const roundsLeft = Math.max(1, maxDismissAttempts - failedRounds);
-        const buttonIndex = read
-            ? pickDismissButtonIndex(read.buttonNames)
-            : null;
-        if (buttonIndex !== null) {
-            await overlay
-                .locator(OVERLAY_BUTTON_SELECTOR)
-                .nth(buttonIndex)
-                .click({
-                    timeout: boundedBy(
-                        deadline,
-                        MAX_DISMISS_CLICK_MS,
-                        roundsLeft,
-                    ),
-                })
-                .catch(() => {});
-            await overlay
-                .waitFor({
-                    state: 'hidden',
-                    timeout: boundedBy(
-                        deadline,
-                        MAX_HIDDEN_WAIT_MS,
-                        roundsLeft,
-                    ),
-                })
-                .catch(() => {});
-            if ((await findVisibleOverlay(page)) === null) {
-                dismissed = true;
-                continue;
-            }
+        if (
+            read &&
+            (await clickOverlayDismissControl(
+                page,
+                overlay,
+                read,
+                deadline,
+                roundsLeft,
+            ))
+        ) {
+            dismissed = true;
+            continue;
         }
 
         // Escape, whether or not a control was pickable: it costs nothing,
