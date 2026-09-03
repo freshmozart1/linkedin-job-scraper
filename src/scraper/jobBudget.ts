@@ -1,4 +1,4 @@
-import type { JobBudget } from '../types';
+import type { JobBudget, RunTimeBudget } from '../types';
 
 /**
  * Default wall-clock budget for one job, in milliseconds. Sized against the
@@ -23,8 +23,22 @@ export function createJobBudget(options: {
     perJobTimeoutMs?: number;
     /** The composed run signal (caller abort + any run-time budget); see createRunTimeBudget. */
     signal?: AbortSignal;
+    /**
+     * The run's own budget, purely so `check` can name what stopped a job it
+     * caught in flight. `signal` alone cannot: `createRunTimeBudget` composes
+     * the caller's abort and the `maxRunDurationMs` timer into one signal, so
+     * without this a run that simply ran out of time would report every
+     * in-flight job as `Scrape aborted` — telling a consumer the caller
+     * cancelled a run the caller never touched, in a string that ends up
+     * persisted on the `FailedJobResult`.
+     */
+    runTimeBudget?: RunTimeBudget;
 }): JobBudget {
-    const { perJobTimeoutMs = DEFAULT_PER_JOB_TIMEOUT_MS, signal } = options;
+    const {
+        perJobTimeoutMs = DEFAULT_PER_JOB_TIMEOUT_MS,
+        signal,
+        runTimeBudget,
+    } = options;
     // `0` or negative disables the budget, following Playwright's own
     // convention for its timeouts rather than inventing a second one.
     const budgeted = perJobTimeoutMs > 0;
@@ -58,9 +72,14 @@ export function createJobBudget(options: {
             return Math.max(1, Math.min(cap, left));
         },
         check(): void {
-            // Abort first, deliberately: when a caller asked to stop and the
-            // deadline happened to pass in the same moment, the caller should
-            // read back what they asked for, not a budget message.
+            // Whatever stopped the *run* comes first, deliberately: a run
+            // that is already over cannot be rescued by finishing the job in
+            // front of it, so blaming this job's own deadline would point a
+            // consumer at the wrong knob. `exceededReason` already resolves
+            // the caller-abort-wins ordering internally, and returns null for
+            // a plain abort — which the next line then reports.
+            const runReason = runTimeBudget?.exceededReason();
+            if (runReason) throw new Error(runReason);
             if (signal?.aborted) throw new Error('Scrape aborted');
             // `Date.now() >= Infinity` is false, so an unbudgeted job never
             // trips this and needs no separate guard.
@@ -70,4 +89,46 @@ export function createJobBudget(options: {
                 );
         },
     };
+}
+
+/**
+ * `budget?.boundedTimeout(cap) ?? cap`, stated once instead of at every wait
+ * in the per-job path. Spelling it out inline repeated each cap literal twice
+ * per site, so a changed cap had to be edited in two places and a mismatch
+ * was silent.
+ */
+export function boundedTimeout(
+    budget: JobBudget | undefined,
+    cap: number,
+): number {
+    return budget?.boundedTimeout(cap) ?? cap;
+}
+
+/**
+ * The clamped `timeoutMs` for an overlay clear, or `null` when the job has
+ * too little left for one to be worth running.
+ *
+ * An overlay clear is not an ordinary wait. `clearBlockingOverlays` escalates
+ * to its DOM-mutating neutralize tier as soon as
+ * `deadline - now <= pollIntervalMs`, so a `timeoutMs` clamped below one poll
+ * interval makes a low-budget job skip the polite dismiss/Escape tiers and
+ * mutate the shared search page on its very first round — reporting
+ * `overlay:undismissed { neutralized: true }` while doing it, and leaving
+ * that mutation in place for every later job in the run. Worse, a clear that
+ * degrades to a single probe answers `stillBlocking` from one look at a page
+ * it never tried to unblock, which `dismissOverlayAfterClick` would then
+ * report as a LinkedIn sign-in wall and `checkForLateOverlay` as a stale
+ * result worth a full re-scrape — both of them blaming the site for the job
+ * simply running out of time.
+ *
+ * Below the floor the clear is skipped outright instead, leaving the job to
+ * stop at the caller's next `budget.check()` with the budget's own message.
+ */
+export function boundedClearTimeout(
+    budget: JobBudget | undefined,
+    cap: number,
+    pollIntervalMs: number,
+): number | null {
+    const bounded = boundedTimeout(budget, cap);
+    return bounded > pollIntervalMs ? bounded : null;
 }

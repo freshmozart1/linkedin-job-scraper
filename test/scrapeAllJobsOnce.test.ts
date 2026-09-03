@@ -347,8 +347,11 @@ describe('scrapeAllJobsOnce()', () => {
         // had left, so only the job that is actually stuck is sacrificed.
         //
         // Real durations, no mocked clock: a clean job through these fakes
-        // spends ~560ms in the overlay-clear polls alone, so 1200ms clears it
-        // comfortably while the middle job's 1400ms click cannot fit.
+        // spends ~560ms in the overlay-clear polls alone, so a 3000ms budget
+        // clears it with room for a loaded CI box to add scheduling delay,
+        // while the middle job's 4000ms click cannot fit under any of it. The
+        // gap is what keeps this from failing for reasons that have nothing to
+        // do with the budget.
         const jobLocators = [
             createFakeJobLocator({
                 title: 'Frontend Developer',
@@ -370,7 +373,7 @@ describe('scrapeAllJobsOnce()', () => {
                 location: 'Hamburg',
                 postedAt: '2026-07-21',
                 onClick: () =>
-                    new Promise<void>((resolve) => setTimeout(resolve, 1400)),
+                    new Promise<void>((resolve) => setTimeout(resolve, 4000)),
             }),
             createFakeJobLocator({
                 title: 'Fullstack Developer',
@@ -406,7 +409,7 @@ describe('scrapeAllJobsOnce()', () => {
                 runTimestamp: 123,
                 delayBetweenJobsMs: 0,
                 companyLookup: stubCompanyLookup(),
-                perJobTimeoutMs: 1200,
+                perJobTimeoutMs: 3000,
                 onProgress: (e) => progressEvents.push(e),
             },
             results,
@@ -418,7 +421,7 @@ describe('scrapeAllJobsOnce()', () => {
         assertFailed(middle);
         assert.equal(
             middle.error,
-            'Job exceeded per-job time budget of 1200ms',
+            'Job exceeded per-job time budget of 3000ms',
         );
         // Still identifiable, and still an ordinary job:done — a timed-out job
         // is a failed job, not a missing one.

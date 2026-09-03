@@ -11,6 +11,7 @@ import {
     OVERLAY_SELECTOR,
     isStaleResult,
     scrapeJob,
+    createRunTimeBudget,
 } from '../src';
 import type { CompanyAddress } from '../src';
 import { baseScrapeJobLocators } from './helpers/baseScrapeJobLocators';
@@ -950,9 +951,16 @@ describe('scrapeJob()', () => {
             // GitHub issue #28: the per-job waits stack past 100s with nothing
             // capping the total, so one systematically blocked job could stall
             // a whole run. The budget is exercised against a real elapsed
-            // duration — 50ms is spent by the overlay clear's own poll before
-            // the click, well after the list card has been read.
-            const jobItem = createFakeJobLocator(budgetedCard);
+            // duration, and the click is what spends it — deliberately the
+            // job's own slow step rather than incidental time inside the
+            // overlay clears, which a near-spent budget now skips outright
+            // (see boundedClearTimeout). 200ms against a 50ms budget leaves no
+            // room for scheduling noise to decide the outcome.
+            const jobItem = createFakeJobLocator({
+                ...budgetedCard,
+                onClick: () =>
+                    new Promise<void>((resolve) => setTimeout(resolve, 200)),
+            });
             const page = createFakePage({
                 locatorsBySelector: {
                     [JOB_LIST_SELECTOR]: createFakeLocator({
@@ -991,13 +999,104 @@ describe('scrapeJob()', () => {
             assert.equal(result.postedAt, '2026-07-21');
         });
 
+        it('reports a budget that expires mid-identity-read as a budget failure, not a markup change', async ({
+            assert,
+        }) => {
+            // `trim` swallows the rejection from a read clamped to 1ms and
+            // hands back '', so every guard in readJobListIdentity turns a
+            // budget expiry into its own domain error — and three of those
+            // say "LinkedIn markup has likely changed", which is this repo's
+            // signal for a real selector regression (GitHub issue #15). A run
+            // under time pressure must not manufacture that alarm.
+            //
+            // The 200ms is spent on the `.base-card` read, i.e. *inside* the
+            // identity sequence: scrapeJob's own check() brackets that call on
+            // both sides, so a delay anywhere else could only ever trip one of
+            // those instead.
+            const jobItem = createFakeJobLocator({
+                ...budgetedCard,
+                companyUrl: null,
+                onAttributeRead: (name) =>
+                    name === 'data-entity-urn'
+                        ? new Promise<void>((resolve) =>
+                              setTimeout(resolve, 200),
+                          )
+                        : undefined,
+            });
+            const page = createFakePage({
+                locatorsBySelector: {
+                    [JOB_LIST_SELECTOR]: createFakeLocator({
+                        nth: () => jobItem,
+                    }),
+                    ...baseScrapeJobLocators(() => 'Acme'),
+                },
+                defaultLocator: createFakeLocator({
+                    waitFor: () => {},
+                    isVisible: () => false,
+                }),
+            });
+
+            const result = await scrapeJob(page, 0, {
+                seenSourceJobIds: new Map(),
+                runTimestamp: 123,
+                companyLookup: stubCompanyLookup(),
+                perJobTimeoutMs: 50,
+            });
+
+            assertFailed(result);
+            assert.equal(
+                result.error,
+                'Job exceeded per-job time budget of 50ms',
+            );
+            // Everything read before the budget went is still reported.
+            assert.equal(result.title, 'Frontend Developer');
+            assert.equal(result.sourceJobId, '111');
+        });
+
+        it('still reports a genuinely missing field as a markup problem when the budget is healthy', async ({
+            assert,
+        }) => {
+            // The counterpart to the test above: the budget re-check must not
+            // swallow the real diagnosis when time was never the problem.
+            const jobItem = createFakeJobLocator({
+                ...budgetedCard,
+                companyUrl: null,
+            });
+            const page = createFakePage({
+                locatorsBySelector: {
+                    [JOB_LIST_SELECTOR]: createFakeLocator({
+                        nth: () => jobItem,
+                    }),
+                    ...baseScrapeJobLocators(() => 'Acme'),
+                },
+                defaultLocator: createFakeLocator({
+                    waitFor: () => {},
+                    isVisible: () => false,
+                }),
+            });
+
+            const result = await scrapeJob(page, 0, {
+                seenSourceJobIds: new Map(),
+                runTimestamp: 123,
+                companyLookup: stubCompanyLookup(),
+                perJobTimeoutMs: 45000,
+            });
+
+            assertFailed(result);
+            assert.equal(result.error, 'No company href found for list item');
+        });
+
         it('scrapes the job normally when the budget is disabled with 0', async ({
             assert,
         }) => {
-            // Same 50ms-worth of overlay polling as above; only the budget
-            // differs, so this pins the failure above on the budget itself
-            // rather than on anything else in the fake page.
-            const jobItem = createFakeJobLocator(budgetedCard);
+            // The same 200ms click as above; only the budget differs, so this
+            // pins the failure above on the budget itself rather than on
+            // anything else in the fake page.
+            const jobItem = createFakeJobLocator({
+                ...budgetedCard,
+                onClick: () =>
+                    new Promise<void>((resolve) => setTimeout(resolve, 200)),
+            });
             const page = createFakePage({
                 locatorsBySelector: {
                     [JOB_LIST_SELECTOR]: createFakeLocator({
@@ -1058,6 +1157,75 @@ describe('scrapeJob()', () => {
             assert.equal(result.error, 'Scrape aborted');
             assert.equal(result.title, 'Frontend Developer');
             assert.equal(result.sourceJobId, '111');
+        });
+
+        it('names the run budget, not an abort, for a job the run timer caught', async ({
+            assert,
+        }) => {
+            // The run budget reaches a job as an AbortSignal — that is how
+            // every existing checkpoint honours it for free — so without the
+            // RunTimeBudget threaded alongside it, a run that merely ran out
+            // of time would tell the consumer the caller cancelled a run the
+            // caller never touched, in a string persisted on the result.
+            const runTimeBudget = createRunTimeBudget(1);
+            const jobItem = createFakeJobLocator(budgetedCard);
+            const page = createFakePage({
+                locatorsBySelector: {
+                    [JOB_LIST_SELECTOR]: createFakeLocator({
+                        nth: () => jobItem,
+                    }),
+                    ...baseScrapeJobLocators(() => 'Acme'),
+                },
+                defaultLocator: createFakeLocator({
+                    waitFor: () => {},
+                    isVisible: () => false,
+                }),
+            });
+            await new Promise((resolve) => setTimeout(resolve, 30));
+
+            const result = await scrapeJob(page, 0, {
+                seenSourceJobIds: new Map(),
+                runTimestamp: 123,
+                companyLookup: stubCompanyLookup(),
+                signal: runTimeBudget.signal,
+                runTimeBudget,
+            });
+
+            assertFailed(result);
+            assert.equal(result.error, 'Run exceeded its 1ms time budget');
+        });
+
+        it("reports the caller's abort in preference to the run budget when both fired", async ({
+            assert,
+        }) => {
+            const controller = new AbortController();
+            controller.abort();
+            const runTimeBudget = createRunTimeBudget(1, controller.signal);
+            const jobItem = createFakeJobLocator(budgetedCard);
+            const page = createFakePage({
+                locatorsBySelector: {
+                    [JOB_LIST_SELECTOR]: createFakeLocator({
+                        nth: () => jobItem,
+                    }),
+                    ...baseScrapeJobLocators(() => 'Acme'),
+                },
+                defaultLocator: createFakeLocator({
+                    waitFor: () => {},
+                    isVisible: () => false,
+                }),
+            });
+            await new Promise((resolve) => setTimeout(resolve, 30));
+
+            const result = await scrapeJob(page, 0, {
+                seenSourceJobIds: new Map(),
+                runTimestamp: 123,
+                companyLookup: stubCompanyLookup(),
+                signal: runTimeBudget.signal,
+                runTimeBudget,
+            });
+
+            assertFailed(result);
+            assert.equal(result.error, 'Scrape aborted');
         });
 
         it('reports an abort in preference to a blown budget when both happened', async ({

@@ -9,6 +9,7 @@ Every search parameter is caller-supplied — there are no fixed defaults for lo
 - [Usage](#usage)
 - [`SearchParams`](#searchparams)
 - [`ScraperOptions`](#scraperoptions)
+  - [Time budgets](#time-budgets)
 - [Return value: `ScrapeOutcome`](#return-value-scrapeoutcome)
   - [Field reference](#field-reference)
   - [`companyAddresses` shape](#companyaddresses-shape)
@@ -65,6 +66,34 @@ Must be synchronous — the return value is checked directly, so a `Promise` (fr
 
 Normally called once per job card, but a job whose first pass came back `'success'` yet stale (see the staleness flags in the field reference below) gets exactly one retry, which consults this callback again — a stateful predicate can see the same job twice with different answers across the two passes, and a retry that flips to `false` replaces the earlier `'success'` result with an empty `'skipped'` one.
 
+### Time budgets
+
+Two optional wall-clock caps bound how long a scrape can take. Both are off-by-default in spirit — the per-job one has a default generous enough that an honest job never notices it, and the run-level one has no default at all.
+
+`perJobTimeoutMs` (default `45000`) is the budget for one job's entire scrape. Every individual Playwright wait below `scrapeJob` — the card scroll, the click ladder, the overlay clears, the detail-pane wait, each field read, and the company-page lookup — is clamped to whatever is left of it, so it bounds *real elapsed* time rather than only being checked between steps. Without it those waits stack past 100 seconds for a single blocked job, and a run scrapes every job in sequence, so one systematically blocked card could make a 30-job run spend the better part of an hour producing nothing.
+
+A job that blows its budget is abandoned and recorded as:
+
+```ts
+{
+  status: 'failed',
+  error: 'Job exceeded per-job time budget of 45000ms',
+  // plus whatever identity was read off the list card before time ran out:
+  // title / sourceJobId / sourceUrl / sourceHostname / companyUrl / location / postedAt
+}
+```
+
+It emits the usual `job:done`, keeps its slot in `results`, and the run moves on to the next job. It is **not** retried — a job that blew its budget is usually blocked by something run-wide (an overlay, a rate limit), so an immediate retry mostly doubles the cost. `0` or a negative value disables the budget entirely, following Playwright's own "0 means no timeout" convention.
+
+`maxRunDurationMs` is the budget for the whole run, browser startup included. There is no default: omitted, a run takes as long as its jobs take. When it runs out the run stops at the next checkpoint — the same ones a `signal` abort stops at — and `runScrape` **resolves** with the results gathered so far plus `stoppedEarly: 'run-time-budget'` (see [`ScrapeOutcome`](#return-value-scrapeoutcome)). A budget the caller asked for is an expected outcome, not a failure, which is why it resolves rather than rejecting the way an abort does. A `signal` abort always wins when both are true. `0`, a negative value, `Infinity` and `NaN` all mean "no run budget".
+
+```ts
+scraperOptions: {
+  perJobTimeoutMs: 45000,     // default; 0 disables
+  maxRunDurationMs: 15 * 60 * 1000,
+}
+```
+
 `overlayClear` groups the settings for the blocking-overlay ladder. LinkedIn's guest pages put a `.modal__overlay--visible` over the job list (cookie consent on load, a "sign in to view more jobs" nag later) that intercepts every click. Each round against a still-visible overlay reads it once, clicks the best control it can find (never *Sign in* / *Join now* — navigating off the search page loses the rest of the run), and presses `Escape`; once `maxDismissAttempts` rounds have failed, the overlay is neutralized outright so the run continues instead of stalling:
 
 ```ts
@@ -96,16 +125,19 @@ scraperOptions: {
 
 ## Return value: `ScrapeOutcome`
 
-`runScrape` resolves once every job has been scraped and the browser it launched has been closed. It never resolves partially — if the run throws, nothing is returned. Collect partial data from `onProgress` as the run goes, or, for a cancelled run specifically, from the thrown `ScrapeAbortedError` itself (see [Cancellation](#cancellation) below).
+`runScrape` resolves once every job has been scraped and the browser it launched has been closed. If the run throws, nothing is returned — collect partial data from `onProgress` as the run goes, or, for a cancelled run specifically, from the thrown `ScrapeAbortedError` itself (see [Cancellation](#cancellation) below). The one case that resolves *without* every job having been scraped is `scraperOptions.maxRunDurationMs` running out, which is flagged by `stoppedEarly`.
 
 ```ts
 interface ScrapeOutcome {
   results: JobResult[];
   url: string; // the exact LinkedIn guest search URL that was loaded
+  stoppedEarly?: 'run-time-budget';
 }
 ```
 
-`results` holds one entry per job the engine considered, ordered by list position — `results[i].index === i`. That's the full search count, or `scraperOptions.maxJobs` when it's set and smaller. Nothing is filtered out: duplicates, failed scrapes (including a list item with no `<h3>`, which isn't a real job card), and jobs `shouldScrapeJob` skipped without ever being clicked all keep their slot, and a stale job that was retried appears once, at its own index, holding the retry's result.
+`stoppedEarly` is absent on a run that scraped every job it found — which is every run that doesn't set [`maxRunDurationMs`](#time-budgets). It is `'run-time-budget'` when that budget ran out first, in which case `results` is short of the `total` reported by `jobs:found` (and is `[]` when the budget expired during the job-loading phase, before any job was scraped or `jobs:found` was even emitted). Existing consumers are unaffected: the field is additive, and a run without a run budget can never set it.
+
+Otherwise `results` holds one entry per job the engine considered, ordered by list position — `results[i].index === i`. That's the full search count, or `scraperOptions.maxJobs` when it's set and smaller. Nothing is filtered out: duplicates, failed scrapes (including a list item with no `<h3>`, which isn't a real job card), jobs abandoned on `perJobTimeoutMs`, and jobs `shouldScrapeJob` skipped without ever being clicked all keep their slot, and a stale job that was retried appears once, at its own index, holding the retry's result.
 
 ```ts
 interface JobResultBase {
@@ -306,7 +338,11 @@ try {
 }
 ```
 
-Aborting doesn't stop `runScrape` mid-job — it stops at the next safe checkpoint (between jobs, or during the job-loading scroll/click polling loops), then always closes the browser via `runScrape`'s own cleanup before rejecting. The rejection is a `ScrapeAbortedError`, not a resolved `ScrapeOutcome`: `error.name === 'AbortError'` (the same convention `fetch` uses) tells a cancelled run apart from any other failure, and `error.partial: ScrapeOutcome` carries whatever `results`/`url` had already been collected at that checkpoint — `results` is `[]` if the signal was already aborted before the run started or during job loading, before any job was scraped.
+`runScrape` itself still only *rejects* at a safe checkpoint — between jobs, or during the job-loading scroll/click polling loops — and always closes the browser via its own cleanup before it does. But the signal now reaches inside the in-flight job too, at the step boundaries of its own [time budget](#time-budgets): an abort lands within seconds instead of waiting out the ~100s a stuck job can take. That job is recorded at its own index as `status: 'failed'` with `error: 'Scrape aborted'`, carrying whatever identity was read off its list card, so the interrupted job keeps an honest slot rather than disappearing. If you persist results, treat that error as "interrupted", not as a job that genuinely failed.
+
+The rejection is a `ScrapeAbortedError`, not a resolved `ScrapeOutcome`: `error.name === 'AbortError'` (the same convention `fetch` uses) tells a cancelled run apart from any other failure, and `error.partial: ScrapeOutcome` carries whatever `results`/`url` had already been collected at that checkpoint — `results` is `[]` if the signal was already aborted before the run started or during job loading, before any job was scraped.
+
+A job in flight when [`maxRunDurationMs`](#time-budgets) expires is recorded the same way, but names the run's clock: `error: 'Run exceeded its <n>ms time budget'`. The run budget reaches a job as an abort signal internally, so the two would otherwise be indistinguishable from inside a job — a run that merely ran out of time would claim the caller cancelled it. The run itself then resolves with `stoppedEarly: 'run-time-budget'` rather than rejecting.
 
 ## Progress events
 

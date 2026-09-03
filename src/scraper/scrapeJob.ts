@@ -1,5 +1,10 @@
 import type { Page } from 'playwright';
-import type { JobCardIdentity, JobResult, ShouldScrapeJob } from '../types';
+import type {
+    JobCardIdentity,
+    JobResult,
+    RunTimeBudget,
+    ShouldScrapeJob,
+} from '../types';
 import type { CompanyLookup } from '../companyLookup';
 import { JOB_CRITERIA_VALUE_SELECTOR } from '../selectors';
 import { jobItemsLocator } from './jobItemsLocator';
@@ -46,6 +51,13 @@ export interface ScrapeJobOptions {
      * mean waiting out the full ~100s a stuck job could take.
      */
     signal?: AbortSignal;
+    /**
+     * The run's own budget, so a job the `maxRunDurationMs` timer catches
+     * mid-flight reports the run's clock rather than `Scrape aborted` — the
+     * two arrive as one composed `signal` and are otherwise indistinguishable
+     * from down here. See `createJobBudget`.
+     */
+    runTimeBudget?: RunTimeBudget;
 }
 
 export async function scrapeJob(
@@ -60,6 +72,7 @@ export async function scrapeJob(
     const budget = createJobBudget({
         perJobTimeoutMs: options.perJobTimeoutMs,
         signal: options.signal,
+        runTimeBudget: options.runTimeBudget,
     });
     // Hoisted so the catch below can return whatever identity was captured
     // before a later failure, instead of losing it along with the rest of
@@ -181,8 +194,14 @@ export async function scrapeJob(
             JOB_CRITERIA_VALUE_SELECTOR,
             { page, budget },
         );
-        if (tags === null)
+        if (tags === null) {
+            // Same reason as readJobListIdentity's checks: `trim` reports a
+            // read clamped to 1ms as a missing element, so without this a
+            // budget that expired during that read would be recorded as
+            // LinkedIn having stopped serving the criteria list.
+            budget.check();
             throw new Error('No job criteria found for job item');
+        }
         return {
             index,
             title,

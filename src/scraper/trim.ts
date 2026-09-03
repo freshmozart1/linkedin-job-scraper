@@ -1,6 +1,7 @@
 import type { Locator, Page } from 'playwright';
 import type { JobBudget } from '../types';
 import { JOB_CRITERIA_VALUE_SELECTOR } from '../selectors';
+import { boundedTimeout } from './jobBudget';
 
 // Reads a single field off `jobItem` (or, for the job-criteria list, off
 // `page`'s detail pane once it's loaded). A plain function rather than a
@@ -25,6 +26,7 @@ export async function trim<T = string | string[] | null>(
     }: { attr?: string; page?: Page; budget?: JobBudget } = {},
 ): Promise<T> {
     const isJobCriteria = locator === JOB_CRITERIA_VALUE_SELECTOR;
+    const timeout = boundedTimeout(budget, 1000);
     const el = (isJobCriteria && p ? p : (p ?? jobItem))
         .locator(locator)
         .first();
@@ -33,7 +35,7 @@ export async function trim<T = string | string[] | null>(
             return (await el
                 .waitFor({
                     state: 'attached',
-                    timeout: budget?.boundedTimeout(1000) ?? 1000,
+                    timeout,
                 })
                 .catch(() => {})
                 .then(() =>
@@ -43,12 +45,8 @@ export async function trim<T = string | string[] | null>(
                     texts.map((t) => t.trim()).filter(Boolean),
                 )) as T;
         const val = attr
-            ? await el.getAttribute(attr, {
-                  timeout: budget?.boundedTimeout(1000) ?? 1000,
-              })
-            : await el.innerText({
-                  timeout: budget?.boundedTimeout(1000) ?? 1000,
-              });
+            ? await el.getAttribute(attr, { timeout })
+            : await el.innerText({ timeout });
         return (val?.trim() || '') as unknown as T;
     } catch {
         return (isJobCriteria ? null : '') as unknown as T;

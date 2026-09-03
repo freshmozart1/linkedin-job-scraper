@@ -372,11 +372,15 @@ export interface JobBudget {
      */
     boundedTimeout(cap: number): number;
     /**
-     * Throws at a step boundary once the job may not continue: `Scrape
-     * aborted` when the signal aborted, otherwise `Job exceeded per-job time
-     * budget of <n>ms`. Abort takes precedence — a caller who asked to stop
-     * should read that back, not a budget message that happened to expire in
-     * the same moment. `scrapeJob`'s existing `catch` turns either into a
+     * Throws at a step boundary once the job may not continue. Whatever
+     * stopped the whole *run* is reported first — `Scrape aborted` when the
+     * caller aborted, or `Run exceeded its <n>ms time budget` when
+     * `ScraperOptions.maxRunDurationMs` ran out — since a run that is already
+     * over cannot be rescued by finishing the job in front of it, and since a
+     * caller who asked to stop should read that back rather than a budget
+     * message that expired in the same moment. Failing those, this job's own
+     * deadline gives `Job exceeded per-job time budget of <n>ms`.
+     * `scrapeJob`'s existing `catch` turns any of them into a
      * `status: 'failed'` result carrying whatever identity was captured
      * before the failure.
      */
@@ -399,8 +403,19 @@ export interface JobBudget {
 export interface RunTimeBudget {
     /** The caller's signal composed with the budget timer, or just the caller's own when no budget was asked for. */
     signal?: AbortSignal;
-    /** Whether the *timer* fired — `false` for a plain caller abort, which `runScrape` still reports as `ScrapeAbortedError`. */
-    exceeded(): boolean;
+    /**
+     * The message a run — or a job caught in flight — should report when the
+     * *timer* is what stopped it, and `null` when it is not: `null` for a run
+     * with no budget, and `null` for a plain caller abort, which `runScrape`
+     * still reports as `ScrapeAbortedError`.
+     *
+     * One nullable string rather than a boolean paired with a message,
+     * because both callers need both halves and would otherwise re-derive the
+     * wording independently. It also encodes the caller-abort-wins ordering
+     * exactly once, here, where both signals are in scope: a caller who asked
+     * to stop reads that back even if the timer expired in the same moment.
+     */
+    exceededReason(): string | null;
 }
 
 export interface ScrapeOutcome {

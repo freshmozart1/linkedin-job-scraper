@@ -26,9 +26,12 @@ interface JobDetailPane {
 // as null regardless of how far this got — so this can simply throw without
 // needing to hand anything back to the caller first.
 //
-// `budget` is forwarded rather than consulted here: every wait this performs
-// belongs to `trim` or to checkForLateOverlay, and each of those clamps its
-// own timeout against it.
+// `budget` is forwarded rather than consulted here for its timeouts: every
+// wait this performs belongs to `trim` or to checkForLateOverlay, and each of
+// those clamps its own timeout against it. It *is* re-checked before the two
+// throws below, though — `trim` swallows the rejection from a read clamped to
+// 1ms and hands back `''`, so a budget that expires mid-read would otherwise
+// be reported as a missing detail pane rather than as the timeout it is.
 export async function readJobDetailPane(
     jobItem: Locator,
     page: Page,
@@ -40,13 +43,18 @@ export async function readJobDetailPane(
         page,
         budget,
     });
-    if (!company) throw new Error('No company in detail pane for job');
+    if (!company) {
+        budget?.check();
+        throw new Error('No company in detail pane for job');
+    }
     const descriptionText = await trim<string>(jobItem, DESCRIPTION_SELECTOR, {
         page,
         budget,
     });
-    if (!descriptionText)
+    if (!descriptionText) {
+        budget?.check();
         throw new Error('No description text found for list item');
+    }
     const companyMismatch = isCompanyMismatch({
         listCompany: await trim(jobItem, LIST_COMPANY_SELECTOR, { budget }),
         detailCompany: company,

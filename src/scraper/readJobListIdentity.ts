@@ -32,6 +32,13 @@ export interface JobListIdentity {
 // `budget` is the job's own wall-clock budget, passed to every read below so
 // seven stacked 1000ms reads can't run on past a deadline that has already
 // gone (see JobBudget).
+//
+// It is also re-checked before every throw, which is not belt-and-suspenders:
+// `trim` swallows the rejection from a read clamped to 1ms and hands back
+// `''`, so without the check a budget that expires between two of these reads
+// surfaces as `No location found for list item` or `... LinkedIn markup has
+// likely changed` — this repo's signal for a real selector regression (GitHub
+// issue #15), raised here for a job that only ran out of time.
 export async function readJobListIdentity(
     jobItem: Locator,
     page: Page,
@@ -39,15 +46,20 @@ export async function readJobListIdentity(
     budget?: JobBudget,
 ): Promise<void> {
     identity.title = await trim<string>(jobItem, 'h3', { budget });
-    if (!identity.title)
+    if (!identity.title) {
+        budget?.check();
         throw new Error(
             'No job title found for this list item - LinkedIn markup has likely changed',
         );
+    }
     const jobHref = await trim(jobItem, JOB_LINK_SELECTOR, {
         attr: 'href',
         budget,
     });
-    if (!jobHref) throw new Error('No job href found for this list item');
+    if (!jobHref) {
+        budget?.check();
+        throw new Error('No job href found for this list item');
+    }
     const jobUrl = new URL(jobHref, page.url());
     if (!jobUrl.hostname)
         throw new Error('No job URL hostname found for this list item');
@@ -63,15 +75,20 @@ export async function readJobListIdentity(
         entityUrn.match(/jobPosting:(\d+)$/)?.[1] ??
         jobIdFromUrl(identity.sourceUrl) ??
         '';
-    if (!identity.sourceJobId)
+    if (!identity.sourceJobId) {
+        budget?.check();
         throw new Error(
             'No source job ID found for job item - LinkedIn markup has likely changed',
         );
+    }
     const companyHref = await trim(jobItem, LIST_COMPANY_LINK_SELECTOR, {
         attr: 'href',
         budget,
     });
-    if (!companyHref) throw new Error('No company href found for list item');
+    if (!companyHref) {
+        budget?.check();
+        throw new Error('No company href found for list item');
+    }
     const companyUrlObj = new URL(companyHref, page.url());
     if (!companyUrlObj.hostname)
         throw new Error('No company URL hostname found for list item');
@@ -81,11 +98,16 @@ export async function readJobListIdentity(
     identity.location = await trim(jobItem, LIST_LOCATION_SELECTOR, {
         budget,
     });
-    if (!identity.location) throw new Error('No location found for list item');
+    if (!identity.location) {
+        budget?.check();
+        throw new Error('No location found for list item');
+    }
     identity.postedAt = await trim(jobItem, LIST_POSTED_AT_SELECTOR, {
         attr: 'datetime',
         budget,
     });
-    if (!identity.postedAt)
+    if (!identity.postedAt) {
+        budget?.check();
         throw new Error('No posted date found for list item');
+    }
 }

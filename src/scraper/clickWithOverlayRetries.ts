@@ -2,6 +2,7 @@ import type { Locator, Page } from 'playwright';
 import type { JobBudget } from '../types';
 import { clearBlockingOverlays } from './clearBlockingOverlays';
 import type { OverlayClearSettings } from './clearBlockingOverlays';
+import { boundedClearTimeout, boundedTimeout } from './jobBudget';
 import { sleep } from './sleep';
 
 export interface ClickWithOverlayRetriesOptions {
@@ -46,27 +47,43 @@ export async function clickWithOverlayRetries(
         budget,
     }: ClickWithOverlayRetriesOptions = {},
 ): Promise<void> {
+    const pollIntervalMs = 200;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-        await clearBlockingOverlays(page, {
-            timeoutMs: budget?.boundedTimeout(4000) ?? 4000,
-            requiredConsecutiveClear: 2,
-            pollIntervalMs: 200,
-            ...overlayClear,
-        });
-        try {
-            await locator.click({
-                timeout: budget?.boundedTimeout(4000) ?? 4000,
+        // `null` means the job has too little budget left for a clear to be
+        // worth running — see boundedClearTimeout, which exists so a
+        // near-spent budget can't drive clearBlockingOverlays straight to its
+        // DOM-mutating neutralize tier. The click below is attempted anyway;
+        // a page that really is blocked shows up as that click failing, which
+        // this already retries.
+        const clearTimeoutMs = boundedClearTimeout(
+            budget,
+            4000,
+            pollIntervalMs,
+        );
+        if (clearTimeoutMs !== null)
+            await clearBlockingOverlays(page, {
+                timeoutMs: clearTimeoutMs,
+                requiredConsecutiveClear: 2,
+                pollIntervalMs,
+                ...overlayClear,
             });
+        try {
+            await locator.click({ timeout: boundedTimeout(budget, 4000) });
             return;
         } catch (error) {
-            // A spent budget (or an abort, which reads as no time left)
-            // stops the ladder here rather than burning the remaining
-            // attempts on 1ms clicks that cannot succeed. The failure is
-            // rethrown either way, so scrapeJob's catch still records the
-            // real Playwright error for this job.
-            if (attempt === maxAttempts || budget?.remaining() === 0)
-                throw error;
-            await sleep(budget?.boundedTimeout(500) ?? 500);
+            // A spent budget (or an abort, which reads as no time left) stops
+            // the ladder here rather than burning the remaining attempts on
+            // 1ms clicks that cannot succeed — and reports it as the budget
+            // failure it is. Rethrowing Playwright's own error instead would
+            // record this job as `locator.click: Timeout 1ms exceeded`,
+            // indistinguishable from a genuine click failure and not the
+            // `Job exceeded per-job time budget of <n>ms` that
+            // ScraperOptions.perJobTimeoutMs promises. `check()` always
+            // throws once `remaining()` is 0, so the rethrow below stays
+            // reachable only for a real failure.
+            if (budget?.remaining() === 0) budget.check();
+            if (attempt === maxAttempts) throw error;
+            await sleep(boundedTimeout(budget, 500));
         }
     }
 }

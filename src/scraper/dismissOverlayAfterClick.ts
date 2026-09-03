@@ -3,6 +3,7 @@ import type { JobBudget } from '../types';
 import { clearBlockingOverlays } from './clearBlockingOverlays';
 import type { OverlayClearSettings } from './clearBlockingOverlays';
 import { describeOverlayDiagnostics } from './describeOverlayDiagnostics';
+import { boundedClearTimeout } from './jobBudget';
 
 // `budget` clamps the 8s local deadline to what the job has left. Nothing
 // inside clearBlockingOverlays needed changing for that: it already ends on
@@ -13,10 +14,19 @@ export async function dismissOverlayAfterClick(
     overlayClear?: OverlayClearSettings,
     budget?: JobBudget,
 ): Promise<void> {
+    const pollIntervalMs = 200;
+    const timeoutMs = boundedClearTimeout(budget, 8000, pollIntervalMs);
+    // Too little budget left for a real clear. Returning is the honest
+    // answer: a clamped clear degrades to a single probe that never attempts
+    // a dismissal, so its `stillBlocking` would blame LinkedIn's sign-in wall
+    // — in the very error string GitHub issue #27 exists to make trustworthy
+    // — for a job that simply ran out of time. scrapeJob's next
+    // `budget.check()` stops the job with the budget's own message instead.
+    if (timeoutMs === null) return;
     const { stillBlocking, diagnostics } = await clearBlockingOverlays(page, {
-        timeoutMs: budget?.boundedTimeout(8000) ?? 8000,
+        timeoutMs,
         requiredConsecutiveClear: 2,
-        pollIntervalMs: 200,
+        pollIntervalMs,
         ...overlayClear,
     });
     // `stillBlocking`, not `!dismissed`: an overlay that had to be

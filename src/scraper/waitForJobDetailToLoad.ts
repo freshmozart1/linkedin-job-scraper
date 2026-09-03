@@ -1,6 +1,7 @@
 import type { Page } from 'playwright';
 import type { JobBudget } from '../types';
 import { DETAIL_TITLE_LINK_SELECTOR } from '../selectors';
+import { boundedTimeout } from './jobBudget';
 
 // The detail pane re-renders client-side after a click; networkidle alone
 // doesn't guarantee that DOM patch has landed (it only tracks network quiet
@@ -22,14 +23,14 @@ export async function waitForJobDetailToLoad(
             .first()
             .waitFor({
                 state: 'visible',
-                timeout: budget?.boundedTimeout(8000) ?? 8000,
+                timeout: boundedTimeout(budget, 8000),
             })
             .catch(() => {});
     }
 
     await page
         .waitForLoadState('networkidle', {
-            timeout: budget?.boundedTimeout(5000) ?? 5000,
+            timeout: boundedTimeout(budget, 5000),
         })
         .catch(() => {});
 }

@@ -140,20 +140,27 @@ export async function createCompanyLookup(
   async function fetchAddresses(
     companyUrl: string,
     budget?: JobBudget
-  ): Promise<CompanyAddress[] | null> {
+  ): Promise<CompanyAddress[] | null | undefined> {
     // Only a successful read writes here, so a failing retry can never downgrade
     // an earlier `[]` (page read, company publishes nothing) into null (nothing
     // could be read at all). Those two are different answers downstream, and the
     // loser of that race gets cached for the rest of the run.
-    let bestResult: CompanyAddress[] | null = null;
+    //
+    // `undefined` is a third answer, distinct from both, and it exists only for
+    // the budget: it means no attempt was made at all, so nothing was learned
+    // about this company and the caller must not cache anything.
+    let bestResult: CompanyAddress[] | null | undefined = undefined;
 
     for (let attempt = 0; attempt <= emptyRetries; attempt++) {
       // A spent budget (or an abort, which reads as no time left) stops the
       // loop rather than paying for navigations that can only time out. On
-      // the very first attempt that means returning `bestResult`'s initial
-      // null — the same answer a blocked page gives, which is why this can
-      // still promise never to reject.
+      // the very first attempt that leaves `bestResult` at `undefined` —
+      // "never looked", not "looked and failed" — which is why this can still
+      // promise never to reject.
       if (budget?.remaining() === 0) break;
+      // Past here an attempt is being made, so `null` (a real failure) is the
+      // worst this can now report.
+      if (bestResult === undefined) bestResult = null;
       try {
         // Before every navigation, not just the first: this is the whole
         // reason the section keeps being served. See the file header.
@@ -191,17 +198,36 @@ export async function createCompanyLookup(
       if (cached !== undefined) return cached;
 
       const addresses = await fetchAddresses(companyUrl, budget);
+      // Nothing may be cached when the budget, not the company page, produced
+      // this answer — `undefined` means no navigation was even attempted, and a
+      // `null` handed back by a job whose budget has since run out came from a
+      // `goto` clamped to whatever milliseconds were left rather than to
+      // `navigationTimeoutMs`. Neither says anything about the company, and the
+      // cache is run-wide: caching one would deny every later job at this
+      // company a real attempt and silently report them all as address-less.
+      // A failure on a healthy budget is still cached, which is the case the
+      // cache comment above is about.
+      if (
+        addresses === undefined ||
+        (addresses === null && budget?.remaining() === 0)
+      )
+        return null;
       const capped =
         addresses && maxAddressesPerCompany !== undefined
           ? addresses.slice(0, maxAddressesPerCompany)
           : addresses;
 
       cache.set(companyUrl, capped);
-      // The politeness delay is worth skipping once the job is out of time:
-      // it exists to space out real network hits, and there are no more of
-      // those coming for this job.
-      if (delayBetweenLookupsMs > 0 && budget?.remaining() !== 0)
-        await sleep(delayBetweenLookupsMs);
+      // The politeness delay exists to space out real network hits, so it is
+      // clamped to what the job has left rather than paid in full: at
+      // `remaining() === 0` there are no more hits coming for this job at all,
+      // and just short of that a full 900ms sleep would overrun the very
+      // deadline the budget exists to hold.
+      const delay = Math.min(
+        delayBetweenLookupsMs,
+        budget?.remaining() ?? Infinity
+      );
+      if (delay > 0) await sleep(delay);
       return capped;
     },
 

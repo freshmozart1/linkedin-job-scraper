@@ -16,7 +16,7 @@ describe('createRunTimeBudget()', () => {
             const budget = createRunTimeBudget(undefined, controller.signal);
 
             assert.equal(budget.signal, controller.signal);
-            assert.equal(budget.exceeded(), false);
+            assert.equal(budget.exceededReason(), null);
         });
 
         it('hands back no signal at all when the caller passed none', ({
@@ -25,7 +25,7 @@ describe('createRunTimeBudget()', () => {
             const budget = createRunTimeBudget();
 
             assert.equal(budget.signal, undefined);
-            assert.equal(budget.exceeded(), false);
+            assert.equal(budget.exceededReason(), null);
         });
 
         it('treats 0 and negative durations as no budget', ({ assert }) => {
@@ -40,22 +40,68 @@ describe('createRunTimeBudget()', () => {
                 controller.signal,
             );
         });
+
+        it('treats Infinity and NaN as no budget rather than rejecting the run', ({
+            assert,
+        }) => {
+            // `AbortSignal.timeout` validates its delay as a uint32 and throws
+            // ERR_OUT_OF_RANGE for either — synchronously, before
+            // `chromium.launch`, as a raw Node error naming only "delay".
+            // `Infinity` is also the natural way to ask for no limit.
+            const controller = new AbortController();
+
+            assert.equal(
+                createRunTimeBudget(Infinity, controller.signal).signal,
+                controller.signal,
+            );
+            assert.equal(
+                createRunTimeBudget(NaN, controller.signal).signal,
+                controller.signal,
+            );
+        });
+    });
+
+    describe('with a duration AbortSignal.timeout would reject', () => {
+        it('rounds a fractional duration instead of throwing ERR_OUT_OF_RANGE', ({
+            assert,
+        }) => {
+            // e.g. a caller's `minutes * 60 * 1000` off a config value of 2.5.
+            const budget = createRunTimeBudget(1500.5);
+
+            assert.equal(budget.signal?.aborted, false);
+            assert.equal(budget.exceededReason(), null);
+        });
+
+        it('caps a duration past the timer range instead of throwing', ({
+            assert,
+        }) => {
+            const budget = createRunTimeBudget(5e9);
+
+            assert.equal(budget.signal?.aborted, false);
+            assert.equal(budget.exceededReason(), null);
+        });
     });
 
     describe('with a run budget', () => {
-        it('aborts its signal, and reports exceeded, once the timer fires', async ({
+        it('aborts its signal, and names the budget, once the timer fires', async ({
             assert,
         }) => {
             const budget = createRunTimeBudget(5);
             assert.equal(budget.signal?.aborted, false);
-            assert.equal(budget.exceeded(), false);
+            assert.equal(budget.exceededReason(), null);
 
             await elapse(30);
 
             // The signal is the whole mechanism: every checkpoint that already
             // stops on `signal?.aborted` honours the run budget for free.
             assert.equal(budget.signal?.aborted, true);
-            assert.equal(budget.exceeded(), true);
+            // The duration is named verbatim, not the rounded/capped value
+            // handed to AbortSignal.timeout — the caller should read back what
+            // they configured.
+            assert.equal(
+                budget.exceededReason(),
+                'Run exceeded its 5ms time budget',
+            );
         });
 
         it("composes with the caller's signal so either one stops the run", ({
@@ -70,7 +116,7 @@ describe('createRunTimeBudget()', () => {
             assert.equal(budget.signal?.aborted, true);
         });
 
-        it('reports exceeded false for a plain caller abort, so runScrape still rejects', async ({
+        it('reports no reason for a plain caller abort, so runScrape still rejects', async ({
             assert,
         }) => {
             // This is the single distinction runScrape needs: an abort keeps
@@ -83,10 +129,26 @@ describe('createRunTimeBudget()', () => {
             await elapse(10);
 
             assert.equal(budget.signal?.aborted, true);
-            assert.equal(budget.exceeded(), false);
+            assert.equal(budget.exceededReason(), null);
         });
 
-        it('reports exceeded once the timer fires even though the caller never aborted', async ({
+        it("keeps reporting the caller's abort even after the timer also fires", async ({
+            assert,
+        }) => {
+            // Both signals are composed into one by the time anything
+            // downstream sees them, so this ordering has to live here: a
+            // caller who asked to stop reads that back rather than a budget
+            // message that expired in the same window.
+            const controller = new AbortController();
+            const budget = createRunTimeBudget(5, controller.signal);
+
+            controller.abort();
+            await elapse(30);
+
+            assert.equal(budget.exceededReason(), null);
+        });
+
+        it('names the budget once the timer fires even though the caller never aborted', async ({
             assert,
         }) => {
             const controller = new AbortController();
@@ -95,7 +157,10 @@ describe('createRunTimeBudget()', () => {
             await elapse(30);
 
             assert.equal(controller.signal.aborted, false);
-            assert.equal(budget.exceeded(), true);
+            assert.equal(
+                budget.exceededReason(),
+                'Run exceeded its 5ms time budget',
+            );
             assert.equal(budget.signal?.aborted, true);
         });
     });

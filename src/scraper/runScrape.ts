@@ -12,7 +12,7 @@ import { scrapeAllJobsOnce } from './scrapeAllJobsOnce';
 import { retryStaleJobs } from './retryStaleJobs';
 import { ScrapeAbortedError } from './ScrapeAbortedError';
 import { createRunTimeBudget } from './runTimeBudget';
-import type { JobResult } from '../types';
+import type { JobResult, ScrapeOutcome } from '../types';
 
 export const runScrape: RunScraper = async ({
     onProgress,
@@ -44,6 +44,13 @@ export const runScrape: RunScraper = async ({
         scraperOptions?.maxRunDurationMs,
         signal,
     );
+    // Spelled out once rather than at each of the three checkpoints below,
+    // which were returning byte-identical objects and could quietly drift.
+    const stoppedOnRunBudget = (): ScrapeOutcome => ({
+        results,
+        url: searchUrl,
+        stoppedEarly: 'run-time-budget',
+    });
 
     const browser = await chromium.launch({
         headless: scraperOptions?.headless ?? false,
@@ -93,12 +100,7 @@ export const runScrape: RunScraper = async ({
         // throwing away every job already scraped.
         if (signal?.aborted)
             throw new ScrapeAbortedError({ results, url: searchUrl });
-        if (runBudget.exceeded())
-            return {
-                results,
-                url: searchUrl,
-                stoppedEarly: 'run-time-budget',
-            };
+        if (runBudget.exceededReason()) return stoppedOnRunBudget();
         const totalJobs = clampTotalJobs(
             discoveredJobs,
             scraperOptions?.maxJobs,
@@ -117,6 +119,11 @@ export const runScrape: RunScraper = async ({
             signal: runBudget.signal,
             shouldScrapeJob: scraperOptions?.shouldScrapeJob,
             perJobTimeoutMs: scraperOptions?.perJobTimeoutMs,
+            // Alongside the composed `signal` above, not folded into it: a
+            // job the budget's timer catches mid-flight needs to name the
+            // run's clock rather than report `Scrape aborted` for a caller
+            // who never aborted anything.
+            runTimeBudget: runBudget,
             // Carried per job so `neutralizeStuckOverlay` / `maxDismissAttempts`
             // reach the three in-job clear sites too, not just the clear above.
             overlayClear: toOverlayClearSettings(scraperOptions),
@@ -125,12 +132,7 @@ export const runScrape: RunScraper = async ({
         const staleIndices = await scrapeAllJobsOnce(ctx, results);
         if (signal?.aborted)
             throw new ScrapeAbortedError({ results, url: searchUrl });
-        if (runBudget.exceeded())
-            return {
-                results,
-                url: searchUrl,
-                stoppedEarly: 'run-time-budget',
-            };
+        if (runBudget.exceededReason()) return stoppedOnRunBudget();
         await retryStaleJobs(ctx, results, staleIndices);
         if (signal?.aborted)
             throw new ScrapeAbortedError({ results, url: searchUrl });
@@ -139,12 +141,7 @@ export const runScrape: RunScraper = async ({
         // first-pass results are all in `results` already. It is still
         // reported, because "some jobs kept a suspect first-pass result" is
         // exactly what a consumer would want to know.
-        if (runBudget.exceeded())
-            return {
-                results,
-                url: searchUrl,
-                stoppedEarly: 'run-time-budget',
-            };
+        if (runBudget.exceededReason()) return stoppedOnRunBudget();
 
         // No `stoppedEarly`: absent means the run scraped every job it found.
         return { results, url: searchUrl };

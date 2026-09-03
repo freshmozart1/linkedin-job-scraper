@@ -32,6 +32,14 @@ export function createFakeJobLocator(opts: {
     entityUrnUnreadable?: boolean;
     /** Collects every getAttribute call, so tests can assert reads are bounded. */
     attributeReads?: AttributeRead[];
+    /**
+     * Awaited before every getAttribute on this card, with the attribute name.
+     * The only way to spend real time *inside* readJobListIdentity's read
+     * sequence: scrapeJob brackets that call with its own `budget.check()` on
+     * both sides, so a delay anywhere else can only ever trip one of those,
+     * never the per-field guards the sequence itself runs.
+     */
+    onAttributeRead?: (name: string) => void | Promise<void>;
     /** The href on the card's company link, which the address lookup is keyed on. */
     companyUrl?: string | null;
     /** The list card's location span text. Undefined/null simulates an unreadable/absent element. */
@@ -67,8 +75,9 @@ export function createFakeJobLocator(opts: {
             }
             if (selector === '.base-card') {
                 return createFakeLocator({
-                    getAttribute: (name, options) => {
+                    getAttribute: async (name, options) => {
                         opts.attributeReads?.push({ name, options });
+                        await opts.onAttributeRead?.(name);
                         if (opts.entityUrnUnreadable) {
                             throw new Error(
                                 'locator.getAttribute: Timeout 30000ms exceeded',
@@ -82,16 +91,18 @@ export function createFakeJobLocator(opts: {
             }
             if (selector === JOB_LINK_SELECTOR) {
                 return createFakeLocator({
-                    getAttribute: (name, options) => {
+                    getAttribute: async (name, options) => {
                         opts.attributeReads?.push({ name, options });
+                        await opts.onAttributeRead?.(name);
                         return opts.sourceUrl ?? null;
                     },
                 });
             }
             if (selector === LIST_COMPANY_LINK_SELECTOR) {
                 return createFakeLocator({
-                    getAttribute: (name, options) => {
+                    getAttribute: async (name, options) => {
                         opts.attributeReads?.push({ name, options });
+                        await opts.onAttributeRead?.(name);
                         return opts.companyUrl ?? null;
                     },
                 });
@@ -107,8 +118,9 @@ export function createFakeJobLocator(opts: {
             }
             if (selector === LIST_POSTED_AT_SELECTOR) {
                 return createFakeLocator({
-                    getAttribute: (name, options) => {
+                    getAttribute: async (name, options) => {
                         opts.attributeReads?.push({ name, options });
+                        await opts.onAttributeRead?.(name);
                         if (opts.postedAtUnreadable) {
                             throw new Error(
                                 'locator.getAttribute: Timeout 30000ms exceeded',
