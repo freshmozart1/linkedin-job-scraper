@@ -1294,6 +1294,15 @@ describe('scrapeJob()', () => {
             assert.deepEqual(scrollOptions, [{ timeout: 5000 }]);
         });
 
+        // The two assertion loops below carry this over the CRAP threshold on
+        // cyclomatic 8, and — as everywhere else in this repo — that score is
+        // fallow's *estimated* 0% coverage applied to a function that is
+        // itself the coverage. What branches here are assertion predicates
+        // over recorded data, not logic worth extracting: collapsing either
+        // loop into a single deepEqual would cost the per-wait failure message
+        // that names *which* wait went unclamped, which is the whole point of
+        // checking them one at a time.
+        // fallow-ignore-next-line complexity
         it('clamps every wait it hands Playwright to what is left of the budget', async (t: TestContext) => {
             // 2000ms is generous enough that the job still scrapes cleanly,
             // yet below every local cap in the per-job path (5000 scroll, 4000

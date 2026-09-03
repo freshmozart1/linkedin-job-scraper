@@ -71,6 +71,16 @@ export function createJobBudget(options: {
             // where the thrown message survives into the failed result.
             return Math.max(1, Math.min(cap, left));
         },
+        // CRAP score here is driven by fallow's *estimated* (not
+        // instrumented) coverage defaulting to 0% for this function, not an
+        // actual untested-complexity risk — cyclomatic 5 and cognitive 3 are
+        // both well under threshold, and only CRAP trips it, at exactly the
+        // 5² + 5 that a 0% estimate produces. Each of the three guards below
+        // is driven by a test: test/jobBudget.test.ts covers the spent
+        // deadline, the abort, and their precedence, and
+        // test/scrapeJob.test.ts covers the runTimeBudget branch that reports
+        // a spent *run* instead of a spent job.
+        // fallow-ignore-next-line complexity
         check(): void {
             // Whatever stopped the *run* comes first, deliberately: a run
             // that is already over cannot be rescued by finishing the job in

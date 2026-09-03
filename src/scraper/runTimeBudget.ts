@@ -15,6 +15,17 @@ import type { RunTimeBudget } from '../types';
 // AbortSignal.timeout / AbortSignal.any are both available on the >= 22.9.0
 // Node this package requires, and the timer is unref'd, so an unfinished
 // budget never holds the process open.
+//
+// CRAP score here is driven by fallow's *estimated* (not instrumented)
+// coverage defaulting to 0% for this function, not an actual
+// untested-complexity risk — cyclomatic 5 and cognitive 3 are both well under
+// threshold, and only CRAP trips it, at exactly the 5² + 5 that a 0% estimate
+// produces. Every branch below is driven by test/runTimeBudget.test.ts: the
+// no-budget pass-through and each spelling of it (undefined, 0, negative,
+// Infinity, NaN), the rounding and capping of a duration AbortSignal.timeout
+// would reject outright, and both orderings exceededReason has to tell apart
+// once the timer and the caller's own signal have fired.
+// fallow-ignore-next-line complexity
 export function createRunTimeBudget(
     maxRunDurationMs?: number,
     signal?: AbortSignal,
