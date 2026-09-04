@@ -47,9 +47,12 @@ export async function clickLoadPhase(
         if (!(await seeMoreButton.isVisible().catch(() => false))) break;
 
         const beforeClickCount = previousUniqueCount;
-        await clickWithOverlayRetries(seeMoreButton, page, clickRetryAttempts, {
-            ...overlayClear,
-            onProgress,
+        // No `budget`: the per-job budget belongs to a job's scrape, and this
+        // is the discovery phase, which is bounded by maxSeeMoreClicks and by
+        // the signal instead.
+        await clickWithOverlayRetries(seeMoreButton, page, {
+            maxAttempts: clickRetryAttempts,
+            overlayClear: { ...overlayClear, onProgress },
         });
         const currentUniqueCount = await pollForNewJobs(
             page,

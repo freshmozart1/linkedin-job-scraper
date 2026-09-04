@@ -346,9 +346,91 @@ export interface OverlayClearResult {
     diagnostics: OverlayDiagnostics | null;
 }
 
+/**
+ * One job's wall-clock deadline, created per job by `createJobBudget` and
+ * threaded through every Playwright wait below `scrapeJob`.
+ *
+ * Clamping each individual wait — rather than racing the job against a timer
+ * — is what makes the budget bound *real* elapsed time without leaving
+ * orphaned browser work running behind a promise that already resolved. The
+ * same object also carries the run's abort signal, so an abort lands inside a
+ * slow job within seconds instead of only between jobs.
+ */
+export interface JobBudget {
+    /** Absolute epoch-ms this job must be finished by; `Infinity` when the budget is disabled. */
+    deadline: number;
+    /**
+     * Clamps one local Playwright timeout to whatever is left of the budget:
+     * never above `cap`, and never `0` — Playwright reads `0` as "no
+     * timeout", which is the exact opposite of what a spent budget means. A
+     * spent or aborted budget returns `1`, collapsing the wait immediately.
+     *
+     * Never throws, and that is load-bearing: `trim` swallows every rejection
+     * from its reads, so a clamp that threw would be laundered into a
+     * misleading `No job title found for this list item`. Stopping the job is
+     * `check`'s job instead.
+     */
+    boundedTimeout(cap: number): number;
+    /**
+     * Throws at a step boundary once the job may not continue. Whatever
+     * stopped the whole *run* is reported first — `Scrape aborted` when the
+     * caller aborted, or `Run exceeded its <n>ms time budget` when
+     * `ScraperOptions.maxRunDurationMs` ran out — since a run that is already
+     * over cannot be rescued by finishing the job in front of it, and since a
+     * caller who asked to stop should read that back rather than a budget
+     * message that expired in the same moment. Failing those, this job's own
+     * deadline gives `Job exceeded per-job time budget of <n>ms`.
+     * `scrapeJob`'s existing `catch` turns any of them into a
+     * `status: 'failed'` result carrying whatever identity was captured
+     * before the failure.
+     */
+    check(): void;
+    /** Milliseconds left; `0` once spent or aborted, `Infinity` when the budget is disabled. */
+    remaining(): number;
+}
+
+/**
+ * The whole run's optional wall-clock budget (`ScraperOptions.maxRunDurationMs`),
+ * expressed as an `AbortSignal` rather than as a new parameter on every phase.
+ *
+ * Every checkpoint that already stops on `signal?.aborted` — `scrollLoadPhase`,
+ * `clickLoadPhase`, `pollForNewJobs`, `scrapeAllJobsOnce`, `retryStaleJobs` —
+ * then honours the run budget for free, with no change to their contracts,
+ * which stay about *stopping early* rather than about any particular error
+ * type. `runScrape` remains the only place that tells a caller abort and an
+ * expired budget apart.
+ */
+export interface RunTimeBudget {
+    /** The caller's signal composed with the budget timer, or just the caller's own when no budget was asked for. */
+    signal?: AbortSignal;
+    /**
+     * The message a run — or a job caught in flight — should report when the
+     * *timer* is what stopped it, and `null` when it is not: `null` for a run
+     * with no budget, and `null` for a plain caller abort, which `runScrape`
+     * still reports as `ScrapeAbortedError`.
+     *
+     * One nullable string rather than a boolean paired with a message,
+     * because both callers need both halves and would otherwise re-derive the
+     * wording independently. It also encodes the caller-abort-wins ordering
+     * exactly once, here, where both signals are in scope: a caller who asked
+     * to stop reads that back even if the timer expired in the same moment.
+     */
+    exceededReason(): string | null;
+}
+
 export interface ScrapeOutcome {
     results: JobResult[];
     url: string;
+    /**
+     * Set only when the run stopped short of scraping every job it found
+     * because `ScraperOptions.maxRunDurationMs` ran out. Absent on a run that
+     * finished, so this is additive for every existing consumer.
+     *
+     * A budget the caller asked for is an expected outcome, not a failure, so
+     * `runScrape` *resolves* with the results gathered so far — unlike an
+     * abort, which keeps rejecting with `ScrapeAbortedError`.
+     */
+    stoppedEarly?: 'run-time-budget';
 }
 
 export interface CompanyMismatchCheck {
@@ -437,6 +519,40 @@ export interface ScraperOptions {
      * with an empty `'skipped'` one at that index.
      */
     shouldScrapeJob?: ShouldScrapeJob;
+    /**
+     * Wall-clock budget for one job's entire scrape, in milliseconds. Default
+     * `45000`; `0` or a negative value disables it, following Playwright's own
+     * "0 means no timeout" convention.
+     *
+     * Nothing else bounds a single job. Every wait in the per-job path has its
+     * own local timeout, but they stack to over 100 seconds, and a run scrapes
+     * every discovered job in sequence — so one systematically blocked click
+     * could make a 30-job run spend the better part of an hour producing
+     * nothing (GitHub issue #28). A job that blows this budget is abandoned and
+     * recorded as `status: 'failed'` with
+     * `error: 'Job exceeded per-job time budget of <n>ms'`, carrying whatever
+     * identity was read off the list card before the budget ran out; it emits
+     * the usual `job:done` and the run moves on to the next job. It is not
+     * retried — a job that blew its budget is usually blocked by something
+     * run-wide (an overlay, a rate limit), so an immediate retry mostly
+     * doubles the cost.
+     *
+     * Enforced by clamping every individual Playwright wait below `scrapeJob`
+     * to what is left of the budget, so it bounds real elapsed time rather
+     * than only being checked between steps.
+     */
+    perJobTimeoutMs?: number;
+    /**
+     * Optional wall-clock budget for the whole run, in milliseconds. No
+     * default: omitted, a run takes as long as its jobs take.
+     *
+     * When it runs out the run stops at the next checkpoint — the same ones an
+     * abort stops at — and `runScrape` *resolves* with the results gathered so
+     * far plus `ScrapeOutcome.stoppedEarly: 'run-time-budget'`. A caller
+     * `signal` abort always wins over the budget when both are true, and still
+     * rejects with `ScrapeAbortedError`.
+     */
+    maxRunDurationMs?: number;
     delayBetweenJobsMs?: number;
     clickRetryAttempts?: number;
     overlayClear?: {

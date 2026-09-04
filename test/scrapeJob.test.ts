@@ -11,6 +11,7 @@ import {
     OVERLAY_SELECTOR,
     isStaleResult,
     scrapeJob,
+    createRunTimeBudget,
 } from '../src';
 import type { CompanyAddress } from '../src';
 import { baseScrapeJobLocators } from './helpers/baseScrapeJobLocators';
@@ -929,6 +930,488 @@ describe('scrapeJob()', () => {
 
         assert.equal(result.status, 'success');
         assert.deepEqual(result.tags, ['Full-time']);
+    });
+
+    describe('time budgets', () => {
+        /** The identity every budget test below reads off the card before its budget runs out. */
+        const budgetedCard = {
+            title: 'Frontend Developer',
+            listCompany: 'Acme',
+            sourceJobId: '111',
+            sourceUrl:
+                'https://de.linkedin.com/jobs/view/frontend-developer-at-acme-111',
+            companyUrl: 'https://de.linkedin.com/company/acme',
+            location: 'Berlin, Berlin, Germany',
+            postedAt: '2026-07-21',
+        };
+
+        it('abandons a job that blows its per-job budget, keeping the identity it read first', async ({
+            assert,
+        }) => {
+            // GitHub issue #28: the per-job waits stack past 100s with nothing
+            // capping the total, so one systematically blocked job could stall
+            // a whole run. The budget is exercised against a real elapsed
+            // duration, and the click is what spends it — deliberately the
+            // job's own slow step rather than incidental time inside the
+            // overlay clears, which a near-spent budget now skips outright
+            // (see boundedClearTimeout). 200ms against a 50ms budget leaves no
+            // room for scheduling noise to decide the outcome.
+            const jobItem = createFakeJobLocator({
+                ...budgetedCard,
+                onClick: () =>
+                    new Promise<void>((resolve) => setTimeout(resolve, 200)),
+            });
+            const page = createFakePage({
+                locatorsBySelector: {
+                    [JOB_LIST_SELECTOR]: createFakeLocator({
+                        nth: () => jobItem,
+                    }),
+                    ...baseScrapeJobLocators(() => 'Acme'),
+                },
+                defaultLocator: createFakeLocator({
+                    waitFor: () => {},
+                    isVisible: () => false,
+                }),
+            });
+
+            const result = await scrapeJob(page, 4, {
+                seenSourceJobIds: new Map(),
+                runTimestamp: 123,
+                companyLookup: stubCompanyLookup(),
+                perJobTimeoutMs: 50,
+            });
+
+            assertFailed(result);
+            assert.equal(
+                result.error,
+                'Job exceeded per-job time budget of 50ms',
+            );
+            // The whole point of failing rather than vanishing: the job still
+            // reports who it was, so a consumer can see *which* postings the
+            // run gave up on.
+            assert.equal(result.index, 4);
+            assert.equal(result.title, 'Frontend Developer');
+            assert.equal(result.sourceJobId, '111');
+            assert.equal(result.sourceUrl, budgetedCard.sourceUrl);
+            assert.equal(result.sourceHostname, 'de.linkedin.com');
+            assert.equal(result.companyUrl, budgetedCard.companyUrl);
+            assert.equal(result.location, 'Berlin, Berlin, Germany');
+            assert.equal(result.postedAt, '2026-07-21');
+        });
+
+        it('reports a budget that expires mid-identity-read as a budget failure, not a markup change', async ({
+            assert,
+        }) => {
+            // `trim` swallows the rejection from a read clamped to 1ms and
+            // hands back '', so every guard in readJobListIdentity turns a
+            // budget expiry into its own domain error — and three of those
+            // say "LinkedIn markup has likely changed", which is this repo's
+            // signal for a real selector regression (GitHub issue #15). A run
+            // under time pressure must not manufacture that alarm.
+            //
+            // The 200ms is spent on the `.base-card` read, i.e. *inside* the
+            // identity sequence: scrapeJob's own check() brackets that call on
+            // both sides, so a delay anywhere else could only ever trip one of
+            // those instead.
+            const jobItem = createFakeJobLocator({
+                ...budgetedCard,
+                companyUrl: null,
+                onAttributeRead: (name) =>
+                    name === 'data-entity-urn'
+                        ? new Promise<void>((resolve) =>
+                              setTimeout(resolve, 200),
+                          )
+                        : undefined,
+            });
+            const page = createFakePage({
+                locatorsBySelector: {
+                    [JOB_LIST_SELECTOR]: createFakeLocator({
+                        nth: () => jobItem,
+                    }),
+                    ...baseScrapeJobLocators(() => 'Acme'),
+                },
+                defaultLocator: createFakeLocator({
+                    waitFor: () => {},
+                    isVisible: () => false,
+                }),
+            });
+
+            const result = await scrapeJob(page, 0, {
+                seenSourceJobIds: new Map(),
+                runTimestamp: 123,
+                companyLookup: stubCompanyLookup(),
+                perJobTimeoutMs: 50,
+            });
+
+            assertFailed(result);
+            assert.equal(
+                result.error,
+                'Job exceeded per-job time budget of 50ms',
+            );
+            // Everything read before the budget went is still reported.
+            assert.equal(result.title, 'Frontend Developer');
+            assert.equal(result.sourceJobId, '111');
+        });
+
+        it('still reports a genuinely missing field as a markup problem when the budget is healthy', async ({
+            assert,
+        }) => {
+            // The counterpart to the test above: the budget re-check must not
+            // swallow the real diagnosis when time was never the problem.
+            const jobItem = createFakeJobLocator({
+                ...budgetedCard,
+                companyUrl: null,
+            });
+            const page = createFakePage({
+                locatorsBySelector: {
+                    [JOB_LIST_SELECTOR]: createFakeLocator({
+                        nth: () => jobItem,
+                    }),
+                    ...baseScrapeJobLocators(() => 'Acme'),
+                },
+                defaultLocator: createFakeLocator({
+                    waitFor: () => {},
+                    isVisible: () => false,
+                }),
+            });
+
+            const result = await scrapeJob(page, 0, {
+                seenSourceJobIds: new Map(),
+                runTimestamp: 123,
+                companyLookup: stubCompanyLookup(),
+                perJobTimeoutMs: 45000,
+            });
+
+            assertFailed(result);
+            assert.equal(result.error, 'No company href found for list item');
+        });
+
+        it('scrapes the job normally when the budget is disabled with 0', async ({
+            assert,
+        }) => {
+            // The same 200ms click as above; only the budget differs, so this
+            // pins the failure above on the budget itself rather than on
+            // anything else in the fake page.
+            const jobItem = createFakeJobLocator({
+                ...budgetedCard,
+                onClick: () =>
+                    new Promise<void>((resolve) => setTimeout(resolve, 200)),
+            });
+            const page = createFakePage({
+                locatorsBySelector: {
+                    [JOB_LIST_SELECTOR]: createFakeLocator({
+                        nth: () => jobItem,
+                    }),
+                    ...baseScrapeJobLocators(() => 'Acme'),
+                },
+                defaultLocator: createFakeLocator({
+                    waitFor: () => {},
+                    isVisible: () => false,
+                }),
+            });
+
+            const result = await scrapeJob(page, 0, {
+                seenSourceJobIds: new Map(),
+                runTimestamp: 123,
+                companyLookup: stubCompanyLookup(),
+                perJobTimeoutMs: 0,
+            });
+
+            assert.equal(result.status, 'success');
+        });
+
+        it('records a job aborted mid-scrape as failed with the abort message, keeping its identity', async ({
+            assert,
+        }) => {
+            // The signal used to be read only between jobs, so aborting inside
+            // a slow job could not take effect until it finished. Threaded
+            // into the job's budget, it lands at the next step boundary — and
+            // the in-flight job keeps an honest slot in the results rather
+            // than disappearing.
+            const controller = new AbortController();
+            const jobItem = createFakeJobLocator({
+                ...budgetedCard,
+                onClick: () => controller.abort(),
+            });
+            const page = createFakePage({
+                locatorsBySelector: {
+                    [JOB_LIST_SELECTOR]: createFakeLocator({
+                        nth: () => jobItem,
+                    }),
+                    ...baseScrapeJobLocators(() => 'Acme'),
+                },
+                defaultLocator: createFakeLocator({
+                    waitFor: () => {},
+                    isVisible: () => false,
+                }),
+            });
+
+            const result = await scrapeJob(page, 0, {
+                seenSourceJobIds: new Map(),
+                runTimestamp: 123,
+                companyLookup: stubCompanyLookup(),
+                signal: controller.signal,
+            });
+
+            assertFailed(result);
+            assert.equal(result.error, 'Scrape aborted');
+            assert.equal(result.title, 'Frontend Developer');
+            assert.equal(result.sourceJobId, '111');
+        });
+
+        it('names the run budget, not an abort, for a job the run timer caught', async ({
+            assert,
+        }) => {
+            // The run budget reaches a job as an AbortSignal — that is how
+            // every existing checkpoint honours it for free — so without the
+            // RunTimeBudget threaded alongside it, a run that merely ran out
+            // of time would tell the consumer the caller cancelled a run the
+            // caller never touched, in a string persisted on the result.
+            const runTimeBudget = createRunTimeBudget(1);
+            const jobItem = createFakeJobLocator(budgetedCard);
+            const page = createFakePage({
+                locatorsBySelector: {
+                    [JOB_LIST_SELECTOR]: createFakeLocator({
+                        nth: () => jobItem,
+                    }),
+                    ...baseScrapeJobLocators(() => 'Acme'),
+                },
+                defaultLocator: createFakeLocator({
+                    waitFor: () => {},
+                    isVisible: () => false,
+                }),
+            });
+            await new Promise((resolve) => setTimeout(resolve, 30));
+
+            const result = await scrapeJob(page, 0, {
+                seenSourceJobIds: new Map(),
+                runTimestamp: 123,
+                companyLookup: stubCompanyLookup(),
+                signal: runTimeBudget.signal,
+                runTimeBudget,
+            });
+
+            assertFailed(result);
+            assert.equal(result.error, 'Run exceeded its 1ms time budget');
+        });
+
+        it("reports the caller's abort in preference to the run budget when both fired", async ({
+            assert,
+        }) => {
+            const controller = new AbortController();
+            controller.abort();
+            const runTimeBudget = createRunTimeBudget(1, controller.signal);
+            const jobItem = createFakeJobLocator(budgetedCard);
+            const page = createFakePage({
+                locatorsBySelector: {
+                    [JOB_LIST_SELECTOR]: createFakeLocator({
+                        nth: () => jobItem,
+                    }),
+                    ...baseScrapeJobLocators(() => 'Acme'),
+                },
+                defaultLocator: createFakeLocator({
+                    waitFor: () => {},
+                    isVisible: () => false,
+                }),
+            });
+            await new Promise((resolve) => setTimeout(resolve, 30));
+
+            const result = await scrapeJob(page, 0, {
+                seenSourceJobIds: new Map(),
+                runTimestamp: 123,
+                companyLookup: stubCompanyLookup(),
+                signal: runTimeBudget.signal,
+                runTimeBudget,
+            });
+
+            assertFailed(result);
+            assert.equal(result.error, 'Scrape aborted');
+        });
+
+        it('reports an abort in preference to a blown budget when both happened', async ({
+            assert,
+        }) => {
+            const controller = new AbortController();
+            controller.abort();
+            const jobItem = createFakeJobLocator(budgetedCard);
+            const page = createFakePage({
+                locatorsBySelector: {
+                    [JOB_LIST_SELECTOR]: createFakeLocator({
+                        nth: () => jobItem,
+                    }),
+                    ...baseScrapeJobLocators(() => 'Acme'),
+                },
+                defaultLocator: createFakeLocator({
+                    waitFor: () => {},
+                    isVisible: () => false,
+                }),
+            });
+
+            const result = await scrapeJob(page, 0, {
+                seenSourceJobIds: new Map(),
+                runTimestamp: 123,
+                companyLookup: stubCompanyLookup(),
+                perJobTimeoutMs: 1,
+                signal: controller.signal,
+            });
+
+            assertFailed(result);
+            assert.equal(result.error, 'Scrape aborted');
+        });
+
+        it("bounds scrollIntoViewIfNeeded explicitly instead of inheriting Playwright's 30s default", async ({
+            assert,
+        }) => {
+            // Nothing calls setDefaultTimeout, so an unbounded
+            // scrollIntoViewIfNeeded was 30s of a stuck job's worst case on
+            // its own — a third of the total the issue measured.
+            const scrollOptions: ({ timeout?: number } | undefined)[] = [];
+            const jobItem = createFakeJobLocator({
+                ...budgetedCard,
+                onScrollIntoView: (options) => {
+                    scrollOptions.push(options);
+                },
+            });
+            const page = createFakePage({
+                locatorsBySelector: {
+                    [JOB_LIST_SELECTOR]: createFakeLocator({
+                        nth: () => jobItem,
+                    }),
+                    ...baseScrapeJobLocators(() => 'Acme'),
+                },
+                defaultLocator: createFakeLocator({
+                    waitFor: () => {},
+                    isVisible: () => false,
+                }),
+            });
+
+            await scrapeJob(page, 0, {
+                seenSourceJobIds: new Map(),
+                runTimestamp: 123,
+                companyLookup: stubCompanyLookup(),
+            });
+
+            assert.deepEqual(scrollOptions, [{ timeout: 5000 }]);
+        });
+
+        // The two assertion loops below carry this over the CRAP threshold on
+        // cyclomatic 8, and — as everywhere else in this repo — that score is
+        // fallow's *estimated* 0% coverage applied to a function that is
+        // itself the coverage. What branches here are assertion predicates
+        // over recorded data, not logic worth extracting: collapsing either
+        // loop into a single deepEqual would cost the per-wait failure message
+        // that names *which* wait went unclamped, which is the whole point of
+        // checking them one at a time.
+        // fallow-ignore-next-line complexity
+        it('clamps every wait it hands Playwright to what is left of the budget', async (t: TestContext) => {
+            // 2000ms is generous enough that the job still scrapes cleanly,
+            // yet below every local cap in the per-job path (5000 scroll, 4000
+            // click, 8000 detail wait, 5000 networkidle) — so each recorded
+            // timeout can only be inside it if the clamp actually reached
+            // Playwright.
+            const perJobTimeoutMs = 2000;
+            const timeouts: { where: string; timeout?: number }[] = [];
+            const attributeReads: AttributeRead[] = [];
+            const jobItem = createFakeJobLocator({
+                ...budgetedCard,
+                attributeReads,
+                onScrollIntoView: (options) => {
+                    timeouts.push({ where: 'scroll', ...options });
+                },
+                onClick: (options) => {
+                    timeouts.push({ where: 'click', ...options });
+                },
+            });
+            const page = createFakePage({
+                locatorsBySelector: {
+                    [JOB_LIST_SELECTOR]: createFakeLocator({
+                        nth: () => jobItem,
+                    }),
+                    ...baseScrapeJobLocators(() => 'Acme'),
+                },
+                // The detail pane's own title-link wait resolves through here.
+                defaultLocator: createFakeLocator({
+                    waitFor: (options) => {
+                        timeouts.push({ where: 'detailWaitFor', ...options });
+                    },
+                    isVisible: () => false,
+                }),
+                waitForLoadState: (_state, options) => {
+                    timeouts.push({ where: 'networkidle', ...options });
+                },
+            });
+
+            const result = await scrapeJob(page, 0, {
+                seenSourceJobIds: new Map(),
+                runTimestamp: 123,
+                companyLookup: stubCompanyLookup(),
+                perJobTimeoutMs,
+            });
+
+            t.assert.equal(result.status, 'success');
+            t.assert.deepEqual(
+                timeouts.map((recorded) => recorded.where).sort(),
+                ['click', 'detailWaitFor', 'networkidle', 'scroll'],
+                'expected every bounded wait in the per-job path to be recorded',
+            );
+            for (const { where, timeout } of timeouts) {
+                t.assert.ok(
+                    typeof timeout === 'number' &&
+                        timeout > 0 &&
+                        timeout <= perJobTimeoutMs,
+                    `${where} was not clamped into (0, ${perJobTimeoutMs}]: ${timeout}`,
+                );
+            }
+            for (const read of attributeReads) {
+                t.assert.ok(
+                    typeof read.options?.timeout === 'number' &&
+                        read.options.timeout > 0 &&
+                        read.options.timeout <= perJobTimeoutMs,
+                    `getAttribute(${read.name}) was not clamped: ${JSON.stringify(read.options)}`,
+                );
+            }
+        });
+
+        it("hands the company lookup the budget so the run's single most expensive step is bounded too", async ({
+            assert,
+        }) => {
+            // addressesFor() can spend navigationTimeoutMs × (1 + emptyRetries)
+            // plus the inter-lookup delay — over 40s of the ~100s worst case.
+            let received: unknown = 'not called';
+            const jobItem = createFakeJobLocator(budgetedCard);
+            const page = createFakePage({
+                locatorsBySelector: {
+                    [JOB_LIST_SELECTOR]: createFakeLocator({
+                        nth: () => jobItem,
+                    }),
+                    ...baseScrapeJobLocators(() => 'Acme'),
+                },
+                defaultLocator: createFakeLocator({
+                    waitFor: () => {},
+                    isVisible: () => false,
+                }),
+            });
+
+            await scrapeJob(page, 0, {
+                seenSourceJobIds: new Map(),
+                runTimestamp: 123,
+                companyLookup: {
+                    async addressesFor(_companyUrl, budget) {
+                        received = budget;
+                        return null;
+                    },
+                    async close() {},
+                },
+                perJobTimeoutMs: 2000,
+            });
+
+            assert.equal(
+                typeof (received as { boundedTimeout?: unknown })
+                    ?.boundedTimeout,
+                'function',
+                'expected addressesFor to receive the job budget',
+            );
+        });
     });
 
     describe('shouldScrapeJob', () => {

@@ -18,7 +18,16 @@ export interface FakePageConfig {
      * per page.evaluate() invocation.
      */
     evaluate?: (arg?: unknown) => unknown | Promise<unknown>;
-    waitForLoadState?: () => void | Promise<void>;
+    /**
+     * Receives the `(state, options)` the scraper passes, so tests can assert
+     * the networkidle wait is clamped to the job's remaining time budget.
+     * Widened additively — a config declaring no parameters is still
+     * assignable.
+     */
+    waitForLoadState?: (
+        state?: string,
+        options?: { timeout?: number },
+    ) => void | Promise<void>;
     /**
      * The guest search URL the page is sitting on. LinkedIn re-renders the
      * detail pane client-side, so this never changes mid-run — which is what
@@ -51,8 +60,12 @@ export function createFakePage(config: FakePageConfig = {}): Page {
             'https://www.linkedin.com/jobs/search?keywords=frontend',
         evaluate: async (_pageFunction?: unknown, arg?: unknown) =>
             config.evaluate ? config.evaluate(arg) : undefined,
-        waitForLoadState: async () => {
-            if (config.waitForLoadState) await config.waitForLoadState();
+        waitForLoadState: async (
+            state?: string,
+            options?: { timeout?: number },
+        ) => {
+            if (config.waitForLoadState)
+                await config.waitForLoadState(state, options);
         },
         goto: async (
             url: string,

@@ -17,6 +17,12 @@ export async function scrapeJobAndRecord(
         clickRetryAttempts: ctx.clickRetryAttempts,
         companyLookup: ctx.companyLookup,
         shouldScrapeJob: ctx.shouldScrapeJob,
+        perJobTimeoutMs: ctx.perJobTimeoutMs,
+        // The signal goes *into* the job, not just around it: checked only
+        // between jobs, an abort could not take effect until the in-flight
+        // job finished — up to the ~100s a stuck one can take.
+        signal: ctx.signal,
+        runTimeBudget: ctx.runTimeBudget,
         // The only route the overlay helpers have to the progress stream and
         // to the caller's overlay tier policy: everything under scrapeJob is
         // several calls deep and holds no reference to either otherwise.

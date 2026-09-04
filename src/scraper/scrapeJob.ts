@@ -1,5 +1,10 @@
 import type { Page } from 'playwright';
-import type { JobCardIdentity, JobResult, ShouldScrapeJob } from '../types';
+import type {
+    JobCardIdentity,
+    JobResult,
+    RunTimeBudget,
+    ShouldScrapeJob,
+} from '../types';
 import type { CompanyLookup } from '../companyLookup';
 import { JOB_CRITERIA_VALUE_SELECTOR } from '../selectors';
 import { jobItemsLocator } from './jobItemsLocator';
@@ -16,6 +21,7 @@ import { dismissOverlayAfterClick } from './dismissOverlayAfterClick';
 import { waitForJobDetailToLoad } from './waitForJobDetailToLoad';
 import { readJobDetailPane } from './readJobDetailPane';
 import { trim } from './trim';
+import { createJobBudget } from './jobBudget';
 
 export interface ScrapeJobOptions {
     preClickDelayMs?: number;
@@ -33,6 +39,25 @@ export interface ScrapeJobOptions {
      * of its own — that stays scrapeJobAndRecord's job.
      */
     overlayClear?: OverlayClearSettings;
+    /**
+     * Wall-clock budget for this one job; see `ScraperOptions.perJobTimeoutMs`
+     * for the default and for what a job that blows it comes back as.
+     */
+    perJobTimeoutMs?: number;
+    /**
+     * The run's (already composed) abort signal. Threaded down to the same
+     * budget as `perJobTimeoutMs` so an abort lands inside a slow job within
+     * seconds, instead of only being noticed between jobs — which used to
+     * mean waiting out the full ~100s a stuck job could take.
+     */
+    signal?: AbortSignal;
+    /**
+     * The run's own budget, so a job the `maxRunDurationMs` timer catches
+     * mid-flight reports the run's clock rather than `Scrape aborted` — the
+     * two arrive as one composed `signal` and are otherwise indistinguishable
+     * from down here. See `createJobBudget`.
+     */
+    runTimeBudget?: RunTimeBudget;
 }
 
 export async function scrapeJob(
@@ -41,6 +66,14 @@ export async function scrapeJob(
     options: ScrapeJobOptions,
 ): Promise<JobResult> {
     const jobItem = jobItemsLocator(page).nth(index);
+    // One budget for this job, created before the first wait so it measures
+    // the job's whole scrape, and threaded through every wait below so it
+    // bounds real elapsed time rather than only being checked between steps.
+    const budget = createJobBudget({
+        perJobTimeoutMs: options.perJobTimeoutMs,
+        signal: options.signal,
+        runTimeBudget: options.runTimeBudget,
+    });
     // Hoisted so the catch below can return whatever identity was captured
     // before a later failure, instead of losing it along with the rest of
     // the job.
@@ -57,7 +90,14 @@ export async function scrapeJob(
     // fails partway through.
     let duplicateOfIdx: number | null = null;
     try {
-        await jobItem.scrollIntoViewIfNeeded();
+        budget.check();
+        // Explicitly bounded: with no `timeout` this silently inherits
+        // Playwright's 30s default (nothing calls setDefaultTimeout), which
+        // was a third of a stuck job's worst case on its own. A card that
+        // won't scroll into view in 5s is not going to click either.
+        await jobItem.scrollIntoViewIfNeeded({
+            timeout: budget.boundedTimeout(5000),
+        });
         // Belt-and-suspenders: jobItemsLocator() already excludes `<li>`s
         // without an `<h3>`, but if LinkedIn's markup shifts and a non-job
         // item slips through anyway, don't click it and fabricate a
@@ -68,7 +108,8 @@ export async function scrapeJob(
             throw new Error(
                 'No job title found for this list item - LinkedIn markup has likely changed',
             );
-        await readJobListIdentity(jobItem, page, identity);
+        budget.check();
+        await readJobListIdentity(jobItem, page, identity, budget);
         // readJobListIdentity only returns without throwing once every field on
         // `identity` is populated, so these are safe to assert non-null here.
         const title = identity.title as string;
@@ -108,14 +149,17 @@ export async function scrapeJob(
 
         if (options.preClickDelayMs) await sleep(options.preClickDelayMs);
 
-        await clickWithOverlayRetries(
-            jobItem,
-            page,
-            options.clickRetryAttempts,
-            options.overlayClear,
-        );
-        await dismissOverlayAfterClick(page, options.overlayClear);
-        await waitForJobDetailToLoad(page, sourceJobId);
+        budget.check();
+        await clickWithOverlayRetries(jobItem, page, {
+            maxAttempts: options.clickRetryAttempts,
+            overlayClear: options.overlayClear,
+            budget,
+        });
+        budget.check();
+        await dismissOverlayAfterClick(page, options.overlayClear, budget);
+        budget.check();
+        await waitForJobDetailToLoad(page, sourceJobId, budget);
+        budget.check();
         const {
             company,
             descriptionText,
@@ -127,6 +171,7 @@ export async function scrapeJob(
             page,
             sourceJobId,
             options.overlayClear,
+            budget,
         );
 
         // Deliberately after readJobDetailPane's checkForLateOverlay: that check
@@ -138,15 +183,25 @@ export async function scrapeJob(
         // The lookup drives its own page on its own context, so it can't disturb
         // this page or its detail pane, and it never rejects — a company page
         // that's blocked or missing yields null instead of failing the job.
-        const companyAddresses =
-            await options.companyLookup.addressesFor(companyUrl);
+        budget.check();
+        const companyAddresses = await options.companyLookup.addressesFor(
+            companyUrl,
+            budget,
+        );
+        budget.check();
         const tags = await trim<string[] | null>(
             jobItem,
             JOB_CRITERIA_VALUE_SELECTOR,
-            { page },
+            { page, budget },
         );
-        if (tags === null)
+        if (tags === null) {
+            // Same reason as readJobListIdentity's checks: `trim` reports a
+            // read clamped to 1ms as a missing element, so without this a
+            // budget that expired during that read would be recorded as
+            // LinkedIn having stopped serving the criteria list.
+            budget.check();
             throw new Error('No job criteria found for job item');
+        }
         return {
             index,
             title,
@@ -168,6 +223,12 @@ export async function scrapeJob(
             tags,
         };
     } catch (error) {
+        // Also where a blown budget and a mid-job abort land: both arrive as
+        // ordinary Errors from budget.check(), so a timed-out or aborted job
+        // still reports whatever identity was captured before it stopped
+        // rather than vanishing, and still emits the usual job:done upstream.
+        // For an abort that means the in-flight job keeps an honest slot in
+        // ScrapeAbortedError's `partial.results`.
         return {
             index,
             title: identity.title,

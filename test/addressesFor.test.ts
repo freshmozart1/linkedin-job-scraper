@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import type { Page } from 'playwright';
-import { createCompanyLookup } from '../src/index';
+import { createCompanyLookup, createJobBudget } from '../src/index';
 import type { CompanyLookup, RawCompanyLocation } from '../src/index';
 import {
     createFakeBrowser,
@@ -234,6 +234,59 @@ describe('addressesFor()', () => {
 
         await lookup.addressesFor(YATTA);
         await lookup.addressesFor(YATTA);
+
+        assert.equal(pending.recorder.gotos.length, 1);
+    });
+
+    it('does not cache a lookup the calling job had no budget left to attempt', async ({
+        assert,
+    }) => {
+        // The cache is run-wide, so a `null` produced by the *caller's* clock
+        // rather than by the company page would deny every later job at this
+        // company a real attempt — silently reporting them all as
+        // address-less. A budget skip means "never looked", which is not an
+        // answer about the company and must not be remembered as one.
+        const pending = makeLookup({
+            locationsFor: () => locationsOf('Frankfurt'),
+        });
+        const lookup = await pending;
+        const spent = createJobBudget({ perJobTimeoutMs: 1 });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+
+        assert.equal(await lookup.addressesFor(YATTA, spent), null);
+        assert.deepEqual(pending.recorder.gotos, []);
+
+        // The next job, with time to spare, still gets its navigation.
+        const addresses = await lookup.addressesFor(
+            YATTA,
+            createJobBudget({ perJobTimeoutMs: 45000 }),
+        );
+
+        assert.deepEqual(
+            addresses?.map((a) => a.city),
+            ['Frankfurt'],
+        );
+        assert.deepEqual(pending.recorder.gotos, [YATTA]);
+    });
+
+    it('still caches a genuine failure when the budget was not the reason', async ({
+        assert,
+    }) => {
+        // The counterpart to the test above: a page that really is broken is
+        // still worth remembering, so it costs one navigation per run rather
+        // than one per job referencing it.
+        const pending = makeLookup({
+            locationsFor: () => locationsOf('Frankfurt'),
+            onGoto: () => {
+                throw new Error('net::ERR_TIMED_OUT');
+            },
+            emptyRetries: 0,
+        });
+        const lookup = await pending;
+
+        const budget = createJobBudget({ perJobTimeoutMs: 45000 });
+        assert.equal(await lookup.addressesFor(YATTA, budget), null);
+        assert.equal(await lookup.addressesFor(YATTA, budget), null);
 
         assert.equal(pending.recorder.gotos.length, 1);
     });

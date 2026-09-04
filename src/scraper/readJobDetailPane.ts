@@ -1,4 +1,5 @@
 import type { Locator, Page } from 'playwright';
+import type { JobBudget } from '../types';
 import {
     COMPANY_SELECTOR,
     DESCRIPTION_SELECTOR,
@@ -24,34 +25,55 @@ interface JobDetailPane {
 // failure — scrapeJob's catch block always reports company/descriptionText
 // as null regardless of how far this got — so this can simply throw without
 // needing to hand anything back to the caller first.
+//
+// `budget` is forwarded rather than consulted here for its timeouts: every
+// wait this performs belongs to `trim` or to checkForLateOverlay, and each of
+// those clamps its own timeout against it. It *is* re-checked before the two
+// throws below, though — `trim` swallows the rejection from a read clamped to
+// 1ms and hands back `''`, so a budget that expires mid-read would otherwise
+// be reported as a missing detail pane rather than as the timeout it is.
 export async function readJobDetailPane(
     jobItem: Locator,
     page: Page,
     sourceJobId: string | null,
     overlayClear?: OverlayClearSettings,
+    budget?: JobBudget,
 ): Promise<JobDetailPane> {
-    const company = await trim<string>(jobItem, COMPANY_SELECTOR, { page });
-    if (!company) throw new Error('No company in detail pane for job');
+    const company = await trim<string>(jobItem, COMPANY_SELECTOR, {
+        page,
+        budget,
+    });
+    if (!company) {
+        budget?.check();
+        throw new Error('No company in detail pane for job');
+    }
     const descriptionText = await trim<string>(jobItem, DESCRIPTION_SELECTOR, {
         page,
+        budget,
     });
-    if (!descriptionText)
+    if (!descriptionText) {
+        budget?.check();
         throw new Error('No description text found for list item');
+    }
     const companyMismatch = isCompanyMismatch({
-        listCompany: await trim(jobItem, LIST_COMPANY_SELECTOR),
+        listCompany: await trim(jobItem, LIST_COMPANY_SELECTOR, { budget }),
         detailCompany: company,
     });
     const detailTitleHref = await trim<string>(
         jobItem,
         DETAIL_TITLE_LINK_SELECTOR,
-        { page, attr: 'href' },
+        { page, attr: 'href', budget },
     );
     const sourceJobIdMismatch = isSourceJobIdMismatch({
         sourceJobId,
         detailTitleHref,
         baseUrl: page.url(),
     });
-    const lateOverlayDetected = await checkForLateOverlay(page, overlayClear);
+    const lateOverlayDetected = await checkForLateOverlay(
+        page,
+        overlayClear,
+        budget,
+    );
     return {
         company,
         descriptionText,

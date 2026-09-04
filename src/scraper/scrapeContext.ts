@@ -1,5 +1,9 @@
 import type { Page } from 'playwright';
-import type { ScrapeProgressEvent, ShouldScrapeJob } from '../types';
+import type {
+    RunTimeBudget,
+    ScrapeProgressEvent,
+    ShouldScrapeJob,
+} from '../types';
 import type { CompanyLookup } from '../companyLookup';
 import type { OverlayClearSettings } from './clearBlockingOverlays';
 
@@ -12,8 +16,22 @@ export interface ScrapeContext {
     delayBetweenJobsMs?: number;
     clickRetryAttempts?: number;
     companyLookup: CompanyLookup;
+    /**
+     * The run's composed abort signal — the caller's own, plus any
+     * `maxRunDurationMs` timer (see `createRunTimeBudget`). Read between jobs
+     * here, and threaded into each job's own budget so it also lands inside
+     * one.
+     */
     signal?: AbortSignal;
     shouldScrapeJob?: ShouldScrapeJob;
+    /** Per-job wall-clock budget; see `ScraperOptions.perJobTimeoutMs`. */
+    perJobTimeoutMs?: number;
+    /**
+     * The run's own budget, carried alongside `signal` rather than folded
+     * into it, so a job caught in flight can say *which* of the two composed
+     * reasons stopped it. Only `runScrape` holds them apart.
+     */
+    runTimeBudget?: RunTimeBudget;
     /**
      * The caller's `ScraperOptions.overlayClear` tier policy, carried per job
      * so it reaches the three in-job clear sites and not just the one
