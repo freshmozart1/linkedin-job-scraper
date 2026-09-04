@@ -14,7 +14,7 @@ This scrapes an unofficial, moving surface — LinkedIn's markup and anti-bot ga
 
 ```bash
 npm run build       # tsc -p tsconfig.json -> dist/ (JS + .d.ts + sourcemaps)
-npm test            # node --import tsx --test "test/*.test.ts"  (158 tests, no browser)
+npm test            # node --import tsx --test "test/*.test.ts"  (196 tests, no browser)
 npm run typecheck   # tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json
 
 # single test file / single test by name:
