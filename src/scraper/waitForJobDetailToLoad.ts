@@ -1,35 +1,36 @@
 import type { Page } from 'playwright';
-import type { JobBudget } from '../types';
+import type {
+    DetailPaneIdentityObservation,
+    JobBudget,
+    WaitObservation,
+} from '../types';
 import { DETAIL_TITLE_LINK_SELECTOR } from '../selectors';
 import { boundedTimeout } from './jobBudget';
 import type { StaleDiagnosticsRecorder } from './createStaleDiagnostics';
+import { jobIdFromUrl, normalizeJobUrl } from '../url';
 
 // The detail pane re-renders client-side after a click; networkidle alone
 // doesn't guarantee that DOM patch has landed (it only tracks network quiet
 // time), so wait for the detail pane's own title link to actually reference
 // this job's ID before trusting its content.
 //
-// Both waits are best-effort already (`.catch(() => {})`), so clamping them
-// to the job's remaining budget only ever makes this give up sooner and hand
-// the — possibly stale — pane to the reads below, which is exactly what
-// isStaleResult exists to catch.
+// The visibility wait is a trigger, not proof: after it resolves (or times
+// out), the actual first title-link href is parsed with the same URL pipeline
+// used everywhere else. Detail fields are only allowed after the full parsed
+// ID matches. Once it does, networkidle remains a best-effort content-settling
+// wait and the identity is checked again immediately afterward.
 //
-// `diagnostics` (optional, so omitting it leaves this byte-identical for
-// direct callers of the exported scrapeJob) records what each wait DID.
-// Deliberately only that: the `.catch(() => {})`s stay, and so does every
-// timeout. GitHub issue #29 suspects this exact silent give-up of producing
-// a third of a run's suspect results, and the point of the diagnostic phase
-// is to *report* the swallowed timeout — measured against the clamped value
-// Playwright was actually handed, so a wait cut short by a spent per-job
-// budget stays distinguishable from one that genuinely ran out. Changing
-// what happens on it is a later phase's job, and one that should be designed
-// from this data rather than guessed at ahead of it.
+// `diagnostics` records both the best-effort wait and the exact comparison.
+// A timeout no longer falls through to detail reads: the caller gets
+// `matched: false` and may perform its one immediate recovery re-click.
 export async function waitForJobDetailToLoad(
     page: Page,
     sourceJobId: string | null,
     budget?: JobBudget,
     diagnostics?: StaleDiagnosticsRecorder,
-): Promise<void> {
+    attempt: DetailPaneIdentityObservation['attempt'] = 'initial',
+): Promise<DetailPaneIdentityObservation> {
+    let titleLinkWait: WaitObservation;
     if (sourceJobId) {
         const timeoutMs = boundedTimeout(budget, 8000);
         const startedAt = Date.now();
@@ -48,38 +49,82 @@ export async function waitForJobDetailToLoad(
             .catch(() => {
                 outcome = 'timedOut';
             });
-        diagnostics?.record({
-            titleLinkWait: {
-                outcome,
-                elapsedMs: Date.now() - startedAt,
-                timeoutMs,
-            },
-        });
+        titleLinkWait = {
+            outcome,
+            elapsedMs: Date.now() - startedAt,
+            timeoutMs,
+        };
     } else {
-        // A card with no sourceJobId skips this wait entirely — which is the
-        // single condition CLAUDE.md already names as "the exact condition
-        // that manufactures stale results", so it is recorded as its own
-        // outcome rather than left absent and mistaken for "never reached".
-        diagnostics?.record({
-            titleLinkWait: { outcome: 'skipped', elapsedMs: 0, timeoutMs: 0 },
-        });
+        // Normal scrapeJob callers reject a missing sourceJobId before the
+        // click. Keep direct helper calls explicit rather than confusing
+        // "could not verify" with "never reached" in their diagnostics.
+        titleLinkWait = { outcome: 'skipped', elapsedMs: 0, timeoutMs: 0 };
     }
 
-    const networkIdleTimeoutMs = boundedTimeout(budget, 5000);
-    const networkIdleStartedAt = Date.now();
-    let networkIdleOutcome: 'resolved' | 'timedOut' = 'resolved';
-    await page
-        .waitForLoadState('networkidle', {
-            timeout: networkIdleTimeoutMs,
-        })
-        .catch(() => {
-            networkIdleOutcome = 'timedOut';
+    if (attempt === 'initial') diagnostics?.record({ titleLinkWait });
+
+    budget?.check();
+    let identity = await readIdentity(page, sourceJobId, budget);
+
+    if (identity.matched) {
+        const networkIdleTimeoutMs = boundedTimeout(budget, 5000);
+        const networkIdleStartedAt = Date.now();
+        let networkIdleOutcome: 'resolved' | 'timedOut' = 'resolved';
+        await page
+            .waitForLoadState('networkidle', {
+                timeout: networkIdleTimeoutMs,
+            })
+            .catch(() => {
+                networkIdleOutcome = 'timedOut';
+            });
+        diagnostics?.record({
+            networkIdleWait: {
+                outcome: networkIdleOutcome,
+                elapsedMs: Date.now() - networkIdleStartedAt,
+                timeoutMs: networkIdleTimeoutMs,
+            },
         });
+        budget?.check();
+        identity = await readIdentity(page, sourceJobId, budget);
+    }
+
+    const observation: DetailPaneIdentityObservation = {
+        attempt,
+        expectedJobId: sourceJobId,
+        detailTitleHref: identity.detailTitleHref,
+        detailJobId: identity.detailJobId,
+        matched: identity.matched,
+        wait: titleLinkWait,
+    };
     diagnostics?.record({
-        networkIdleWait: {
-            outcome: networkIdleOutcome,
-            elapsedMs: Date.now() - networkIdleStartedAt,
-            timeoutMs: networkIdleTimeoutMs,
-        },
+        detailTitleHref: identity.detailTitleHref,
+        detailJobId: identity.detailJobId,
     });
+    diagnostics?.recordDetailIdentityCheck(observation);
+    return observation;
+}
+
+async function readIdentity(
+    page: Page,
+    sourceJobId: string | null,
+    budget?: JobBudget,
+): Promise<{
+    detailTitleHref: string | null;
+    detailJobId: string | null;
+    matched: boolean;
+}> {
+    const detailTitleHref = await page
+        .locator(DETAIL_TITLE_LINK_SELECTOR)
+        .first()
+        .getAttribute('href', { timeout: boundedTimeout(budget, 1000) })
+        .catch(() => null);
+    budget?.check();
+    const detailJobId = jobIdFromUrl(
+        normalizeJobUrl(detailTitleHref, page.url()),
+    );
+    return {
+        detailTitleHref,
+        detailJobId,
+        matched: sourceJobId !== null && detailJobId === sourceJobId,
+    };
 }

@@ -9,18 +9,18 @@ import { createFakeLocator } from './fakePlaywright';
 
 /**
  * Locators shared by every scrapeJob() test: no overlay ever appears, and
- * the detail-pane title link is always found. When `sourceJobId` is passed,
- * the detail-pane title link's href is also registered to reference that
- * same job — a non-stale pane — so `sourceJobIdMismatch` stays false.
- * Omitted, the href stays unconfigured (null), which also leaves
- * `sourceJobIdMismatch` false via its own fail-open null-guard.
+ * the detail-pane title link is always found. The title-link href defaults to
+ * job `111`, matching the fixture default; pass a value or callback to model
+ * a different, delayed, or persistently stale pane.
  */
 export function baseScrapeJobLocators(
     detailCompany: () => string | null,
     description = 'A description.',
     tags: string[] = ['Full-time'],
-    sourceJobId: string | null = null,
+    sourceJobId: string | null | (() => string | null) = '111',
 ) {
+    const currentSourceJobId = () =>
+        typeof sourceJobId === 'function' ? sourceJobId() : sourceJobId;
     return {
         [OVERLAY_SELECTOR]: createFakeLocator({ isVisible: () => false }),
         [COMPANY_SELECTOR]: createFakeLocator({
@@ -37,13 +37,13 @@ export function baseScrapeJobLocators(
         [JOB_CRITERIA_VALUE_SELECTOR]: createFakeLocator({
             allInnerTexts: () => tags,
         }),
-        ...(sourceJobId
-            ? {
-                  [DETAIL_TITLE_LINK_SELECTOR]: createFakeLocator({
-                      getAttribute: () =>
-                          `https://de.linkedin.com/jobs/view/some-job-${sourceJobId}`,
-                  }),
-              }
-            : {}),
+        [DETAIL_TITLE_LINK_SELECTOR]: createFakeLocator({
+            getAttribute: () => {
+                const jobId = currentSourceJobId();
+                return jobId
+                    ? `https://de.linkedin.com/jobs/view/some-job-${jobId}`
+                    : null;
+            },
+        }),
     };
 }

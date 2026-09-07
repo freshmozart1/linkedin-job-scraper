@@ -54,8 +54,8 @@ export const JOB_CRITERIA_VALUE_SELECTOR =
  * lets a pane left over from an earlier posting at the *same* company still
  * be caught (confirmed live: two different postings from one company each
  * render this href with their own distinct job ID). `waitForJobDetailToLoad`
- * appends its own `[href*="-<jobId>"]` filter onto this same base selector
- * rather than duplicating the `topcard-title` string.
+ * appends its own `[href*="-<jobId>"]` filter as a wait trigger, then parses
+ * the actual href and compares the complete ID before trusting the pane.
  */
 export const DETAIL_TITLE_LINK_SELECTOR = 'a[href*="topcard-title"]';
 /**

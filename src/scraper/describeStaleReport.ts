@@ -32,6 +32,9 @@ export function describeStaleReport(report: StaleReport): string {
     lines.push(
         `  retries: ${report.retriesAttempted} attempted, ${report.retriesRecovered} recovered`,
     );
+    lines.push(
+        `  identity recovery: ${report.identityRecovery.attempted} attempted, ${report.identityRecovery.recovered} recovered, ${report.identityRecovery.failed} failed`,
+    );
 
     // Every combination is printed, including the ones at zero: "this
     // combination never occurred" is one of the questions GitHub issue #29

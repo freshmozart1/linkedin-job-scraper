@@ -32,11 +32,11 @@ interface JobDetailPane {
  */
 const SNAPSHOT_MIN_BUDGET_MS = 250;
 
-// Reads the detail pane once it's loaded after the click. Unlike the list
-// identity in `readJobListIdentity`, none of these fields survive a partial
-// failure — scrapeJob's catch block always reports company/descriptionText
-// as null regardless of how far this got — so this can simply throw without
-// needing to hand anything back to the caller first.
+// Reads the detail pane once scrapeJob's exact source-ID gate has accepted it.
+// Unlike the list identity in `readJobListIdentity`, none of these fields
+// survive a partial failure — scrapeJob's catch block always reports
+// company/descriptionText as null regardless of how far this got — so this can
+// simply throw without needing to hand anything back to the caller first.
 //
 // `budget` is forwarded rather than consulted here for its timeouts: every
 // wait this performs belongs to `trim` or to checkForLateOverlay, and each of
@@ -45,12 +45,11 @@ const SNAPSHOT_MIN_BUDGET_MS = 250;
 // 1ms and hands back `''`, so a budget that expires mid-read would otherwise
 // be reported as a missing detail pane rather than as the timeout it is.
 //
-// `diagnostics` (optional trailing parameter, so omitting it leaves this
-// byte-identical) is the one place a job's two sides can be recorded
-// together: what the list card said versus what the pane actually showed,
-// plus how long after the click each read happened. GitHub issue #29 needs a
-// leftover pane traced to *which* previously-clicked job it belonged to, and
-// only this function ever holds both halves at once.
+// `diagnostics` is an optional trailing parameter and is the one place a job's
+// two sides can be recorded together: what the list card said versus what the
+// pane actually showed, plus how long after the click each read happened.
+// GitHub issue #29 needs a leftover pane traced to *which* previously-clicked
+// job it belonged to, and only this function ever holds both halves at once.
 //
 // CRAP score here is driven by fallow's *estimated* (not instrumented)
 // coverage defaulting to 0% for this function — it is internal, with no test

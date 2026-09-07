@@ -169,6 +169,53 @@ describe('summarizeStaleDiagnostics()', () => {
         assert.equal(report.retriesRecovered, 1);
     });
 
+    it('summarizes immediate identity recovery and credits a deferred retry after an identity failure', ({
+        assert,
+    }) => {
+        const initialMismatch = {
+            attempt: 'initial' as const,
+            expectedJobId: '222',
+            detailTitleHref:
+                'https://www.linkedin.com/jobs/view/previous-job-111',
+            detailJobId: '111',
+            matched: false,
+            wait: { outcome: 'timedOut' as const, elapsedMs: 8000, timeoutMs: 8000 },
+        };
+        const recovered = {
+            attempt: 'immediate-reclick' as const,
+            expectedJobId: '222',
+            detailTitleHref:
+                'https://www.linkedin.com/jobs/view/current-job-222',
+            detailJobId: '222',
+            matched: true,
+            wait: { outcome: 'resolved' as const, elapsedMs: 20, timeoutMs: 8000 },
+        };
+        const stillMismatched = {
+            ...initialMismatch,
+            attempt: 'immediate-reclick' as const,
+        };
+        const report = summarizeStaleDiagnostics([
+            makeStaleDiagnostics({
+                index: 0,
+                detailIdentityChecks: [initialMismatch, recovered],
+            }),
+            makeStaleDiagnostics({
+                index: 1,
+                resultStatus: 'failed',
+                detailIdentityChecks: [initialMismatch, stillMismatched],
+            }),
+            makeStaleDiagnostics({ index: 1, pass: 'retry' }),
+        ]);
+
+        assert.deepEqual(report.identityRecovery, {
+            attempted: 2,
+            recovered: 1,
+            failed: 1,
+        });
+        assert.equal(report.retriesAttempted, 1);
+        assert.equal(report.retriesRecovered, 1);
+    });
+
     it('never credits one run’s retry against another run’s first pass', ({
         assert,
     }) => {

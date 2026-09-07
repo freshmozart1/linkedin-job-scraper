@@ -159,11 +159,11 @@ export const runScrape: RunScraper = async ({
                 : undefined,
         };
 
-        const staleIndices = await scrapeAllJobsOnce(ctx, results);
+        const retryIndices = await scrapeAllJobsOnce(ctx, results);
         if (signal?.aborted)
             throw new ScrapeAbortedError({ results, url: searchUrl });
         if (runBudget.exceededReason()) return stoppedOnRunBudget();
-        await retryStaleJobs(ctx, results, staleIndices);
+        await retryStaleJobs(ctx, results, retryIndices);
         if (signal?.aborted)
             throw new ScrapeAbortedError({ results, url: searchUrl });
         // The stale-retry pass is the last thing a run does, so a budget that

@@ -65,7 +65,7 @@ scraperOptions: {
 
 Must be synchronous — the return value is checked directly, so a `Promise` (from an `async` function) is always truthy and the skip branch would never fire. Resolve any async work (e.g. against your own database) before calling `runScrape`.
 
-Normally called once per job card, but a job whose first pass came back `'success'` yet stale (see the staleness flags in the field reference below) gets exactly one retry, which consults this callback again — a stateful predicate can see the same job twice with different answers across the two passes, and a retry that flips to `false` replaces the earlier `'success'` result with an empty `'skipped'` one.
+Normally called once per job card, but a job whose first pass came back `'success'` yet stale, or failed because the detail pane never proved its identity, gets exactly one deferred retry. That pass consults this callback again — a stateful predicate can see the same job twice with different answers, and a retry that flips to `false` replaces the earlier result with an empty `'skipped'` one.
 
 ### Time budgets
 
@@ -126,7 +126,7 @@ scraperOptions: {
 
 ### Stale diagnostics
 
-Every considered list index is recorded, including failed and pre-click-skipped jobs, and retry attempts are retained as separate records. The run's records are aggregated into [`ScrapeOutcome.staleReport`](#return-value-scrapeoutcome). This is observation only: nothing here changes a wait, a retry or a staleness flag.
+Every considered list index is recorded, including failed and pre-click-skipped jobs, and retry attempts are retained as separate records. The run's records are aggregated into [`ScrapeOutcome.staleReport`](#return-value-scrapeoutcome). Diagnostics observe the recovery policy; turning diagnostics off does not change identity gating, waits, retries, or staleness flags.
 
 ```ts
 scraperOptions: {
@@ -141,7 +141,7 @@ scraperOptions: {
 
 Collection is on by default because everything but the snapshot is a value the scrape already computed — timestamps, booleans, strings it read anyway — so it costs no extra browser round-trips. `domSnapshot` is off by default because it is one extra `page.evaluate` per captured job, and it is the only part that does.
 
-Each `StaleDiagnostics` record names its `runId`, `totalJobs`, pass and final `resultStatus`; compares the clicked card's identity with what the pane showed; records both detail-pane waits and read timings; and carries an `overlayChecks` timeline for every pre-click, post-click and late clear. Snapshot capture reports `not-requested`, `captured`, `skipped-budget` or `failed`, with an error for failures, so missing evidence is attributable. The same record is attached to that job's `job:done` / `job:stale` event.
+Each `StaleDiagnostics` record names its `runId`, `totalJobs`, pass and final `resultStatus`; compares the clicked card's identity with what the pane showed; and carries ordered `detailIdentityChecks` for the initial activation and optional immediate re-click. Each check retains the expected ID, observed href and parsed ID, exact-match result, and wait timing. The record also carries read timings and an `overlayChecks` timeline for every pre-click, post-click and late clear. Snapshot capture reports `not-requested`, `captured`, `skipped-budget` or `failed`, with an error for failures, so missing evidence is attributable. The same record is attached to that job's `job:done` / `job:stale` event.
 
 `summarizeStaleDiagnostics` and `describeStaleReport` are exported and pure, so several runs' records can be concatenated and re-summarized as one:
 
@@ -152,7 +152,7 @@ const combined = summarizeStaleDiagnostics([...runA.records, ...runB.records]);
 console.log(describeStaleReport(combined));
 ```
 
-Headline counts, flag combinations, positions and `StaleReport.conditions` use successful first-pass jobs only: a retry is evidence about recovery, not another job in the denominator, and a failed result is never stale. Retry records remain available under `records` and in `retriesAttempted` / `retriesRecovered`. Run boundaries come from `runId`, halves from `totalJobs`, and predecessor conditions only from the exact preceding index.
+Headline counts, flag combinations, positions and `StaleReport.conditions` use successful first-pass jobs only: a retry is evidence about recovery, not another job in the denominator, and a failed result is never stale. Retry records remain available under `records` and in `retriesAttempted` / `retriesRecovered`; `identityRecovery` separately counts immediate re-clicks that were attempted, recovered, or failed. Run boundaries come from `runId`, halves from `totalJobs`, and predecessor conditions only from the exact preceding index.
 
 `scripts/diagnose-stale.ts` drives all of this against the live site. It is not part of the published package:
 
@@ -179,7 +179,7 @@ interface ScrapeOutcome {
 
 `stoppedEarly` is absent on a run that scraped every job it found — which is every run that doesn't set [`maxRunDurationMs`](#time-budgets). It is `'run-time-budget'` when that budget ran out first, in which case `results` is short of the `total` reported by `jobs:found` (and is `[]` when the budget expired during the job-loading phase, before any job was scraped or `jobs:found` was even emitted). Existing consumers are unaffected: the field is additive, and a run without a run budget can never set it.
 
-Otherwise `results` holds one entry per job the engine considered, ordered by list position — `results[i].index === i`. That's the full search count, or `scraperOptions.maxJobs` when it's set and smaller. Nothing is filtered out: duplicates, failed scrapes (including a list item with no `<h3>`, which isn't a real job card), jobs abandoned on `perJobTimeoutMs`, and jobs `shouldScrapeJob` skipped without ever being clicked all keep their slot, and a stale job that was retried appears once, at its own index, holding the retry's result.
+Otherwise `results` holds one entry per job the engine considered, ordered by list position — `results[i].index === i`. That's the full search count, or `scraperOptions.maxJobs` when it's set and smaller. Nothing is filtered out: duplicates, failed scrapes (including a list item with no `<h3>`, which isn't a real job card), jobs abandoned on `perJobTimeoutMs`, and jobs `shouldScrapeJob` skipped without ever being clicked all keep their slot. A stale result or detail-identity failure selected for the deferred retry appears once, at its own index, holding the retry's replacement result.
 
 ```ts
 interface JobResultBase {
@@ -213,6 +213,7 @@ interface SuccessfulJobResult extends JobResultBase {
 interface FailedJobResult extends JobResultBase {
   status: 'failed';
   error: string;                    // the thrown error's message
+  failureReason?: 'detail-pane-identity-unverified';
   title: string | null;
   company: null;
   descriptionText: null;
@@ -264,8 +265,8 @@ Field notes worth knowing before you consume this.
 
 `JobResult` is a union of `SuccessfulJobResult`, `FailedJobResult`, and `SkippedJobResult` with different shapes — narrow on `status` before reading anything else.
 
-- `'success'` means the card was clicked and the detail pane was read (that does *not* by itself mean the data is trustworthy; see the staleness flags below) — every content field is guaranteed present.
-- `'failed'` means `scrapeJob()` threw somewhere along the way; `error` (only present on this variant) carries the thrown message, and every other content field holds whatever was captured before the failure — `null` if the failure happened before that particular field was ever read.
+- `'success'` means the card was clicked, its detail title-link ID exactly matched the card's `sourceJobId`, and the detail pane was then read. Other staleness signals can still flag the result, but a known predecessor pane is never returned as a trusted success.
+- `'failed'` means `scrapeJob()` threw somewhere along the way; `error` carries the message, and `failureReason` is `'detail-pane-identity-unverified'` when both the initial activation and one immediate re-click failed the identity gate. Detail-derived fields stay `null` in that case. Other failures omit `failureReason`.
 - `'skipped'` means `scraperOptions.shouldScrapeJob` returned `false` for this card's list-level identity — the card was never clicked. `title`/`sourceJobId`/`sourceUrl`/`sourceHostname`/`companyUrl`/`location`/`postedAt` are exactly what was read off the list card; `error` is not present on this variant (it isn't a failure).
 - `company`/`descriptionText`/`companyAddresses`/`tags` are always `null` on a failed or skipped result, since they're only read after everything else.
 
@@ -279,7 +280,7 @@ Field notes worth knowing before you consume this.
 The three staleness signals, present on both variants (always `false` on a failed result).
 
 - `companyMismatch` catches the list-pane company disagreeing with the detail-pane company.
-- `sourceJobIdMismatch` catches the narrower case that slips past it — a detail pane left over from an *earlier posting at the same company*, detected by comparing the detail pane's own title-link job ID against the clicked job's `sourceJobId`.
+- `sourceJobIdMismatch` remains a defense against the pane changing after the identity gate and before the final title-link read. A pane that is already mismatched at the gate is re-clicked once and then fails explicitly instead of reaching these fields.
 - `lateOverlayDetected` catches a blocking overlay sitting over the pane around the moment its data was read — **however that overlay was eventually got rid of.** It is `true` for one that was dismissed by a click or by `Escape`, one that had to be forcibly neutralized, and one that was still blocking when the clear gave up alike. That is wider than it used to be: before the escalation ladder landed, the flag only meant "an overlay was *still there* after the clear failed". Reading it as "the page was blocked" now under-reports — an overlay that renders over the pane and is then closed cleanly can still have covered the read, and the read is what this flag is about. The practical consequence is that a run whose overlays are being dismissed successfully will flag more jobs than the same run did before, and each of those jobs gets the one retry a stale result is entitled to rather than being kept as trustworthy.
 - Pass the result to the exported `isStaleResult(result)` rather than testing them by hand; it folds all three into one predicate, only returns `true` for a `'success'` result, and is the same check the engine used to decide whether to retry.
 - A result still flagged after the run means the retry didn't clear it — treat its `company`/`descriptionText` as possibly belonging to the previously-viewed job.

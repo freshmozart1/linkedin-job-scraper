@@ -31,6 +31,10 @@ describe('describeStaleReport()', () => {
         assert.match(rendered, /retries: 0 attempted, 0 recovered/);
         assert.match(
             rendered,
+            /identity recovery: 0 attempted, 0 recovered, 0 failed/,
+        );
+        assert.match(
+            rendered,
             /flag combinations \(of 2 successful first-pass jobs\)/,
         );
         assert.match(rendered, /company\+sourceJobId\s+1/);
