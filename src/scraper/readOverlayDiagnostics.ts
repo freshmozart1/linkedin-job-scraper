@@ -61,13 +61,28 @@ export async function readOverlayDiagnostics(
             // element the caller is trying to dismiss.
             const overlay = g.document.querySelector(overlaySelector);
             if (!overlay) return null;
-            const collapse = (raw: string | null): string =>
-                (raw ?? '').replace(/\s+/g, ' ').trim();
+            // A bare regex rather than the `const collapse = (raw) => …`
+            // helper this used to be, and the reason is not style: esbuild
+            // compiles a named function expression to `__name(fn,
+            // 'collapse')`, and `page.evaluate` ships this callback to the
+            // browser via `toString()`, where esbuild's `__name` helper does
+            // not exist — so the whole read died with `ReferenceError:
+            // __name is not defined` and the caller's `.catch(() => null)`
+            // reported it as "no overlay to describe". Invisible in the
+            // published package, which tsc builds, and invisible here too
+            // because every call site swallows the rejection by design; it
+            // surfaced only when this repo's own tsx-run diagnose-stale.ts
+            // started depending on these reads. Nothing inside an evaluate
+            // body may be a named function.
+            const whitespace = /\s+/g;
             // textContent, never innerText: the overlay's own base classes
             // still say `invisible`, so the browser reports an empty
             // innerText for it even while it is intercepting every click —
             // the same trap the collapsed company-locations markup hits.
-            const text = collapse(overlay.textContent).slice(0, maxTextLength);
+            const text = (overlay.textContent ?? '')
+                .replace(whitespace, ' ')
+                .trim()
+                .slice(0, maxTextLength);
             const buttons = Array.from(
                 overlay.querySelectorAll(buttonSelector),
             );
@@ -77,8 +92,15 @@ export async function readOverlayDiagnostics(
                 buttonNames: buttons.map((button) => {
                     // A present-but-empty aria-label must not shadow real
                     // text, so this is not a plain `??`.
-                    const label = collapse(button.getAttribute('aria-label'));
-                    return label || collapse(button.textContent);
+                    const label = (button.getAttribute('aria-label') ?? '')
+                        .replace(whitespace, ' ')
+                        .trim();
+                    return (
+                        label ||
+                        (button.textContent ?? '')
+                            .replace(whitespace, ' ')
+                            .trim()
+                    );
                 }),
             };
         },

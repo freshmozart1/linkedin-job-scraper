@@ -247,6 +247,16 @@ export interface JobStartEvent {
 export interface JobDoneEvent {
     type: 'job:done';
     result: JobResult;
+    /**
+     * Everything the scrape observed about this job (GitHub issue #29).
+     * Present on `job:done` as well as on `job:stale`, and that is the
+     * point: the healthy jobs are the denominator, so a consumer aggregating
+     * these can answer "how often does this condition go *with* a clean
+     * scrape" rather than only counting the suspect ones. Absent when
+     * `ScraperOptions.staleDiagnostics.enabled` is `false`. Skipped jobs carry
+     * a minimal record so positional analysis retains every list index.
+     */
+    diagnostics?: StaleDiagnostics;
 }
 /**
  * Emitted instead of `job:done` when the scrape technically succeeded but the
@@ -259,6 +269,8 @@ export interface JobDoneEvent {
 export interface JobStaleEvent {
     type: 'job:stale';
     result: JobResult;
+    /** See `JobDoneEvent.diagnostics`; on this event it always describes a job at least one flag fired for. */
+    diagnostics?: StaleDiagnostics;
 }
 /**
  * Everything `readOverlayDiagnostics` can see about a blocking overlay, read
@@ -332,6 +344,8 @@ export type ScrapeProgressEvent =
  * re-querying the page themselves to tell the two apart (GitHub issue #27).
  */
 export interface OverlayClearResult {
+    /** Whether this clear observed an overlay at least once. */
+    observed: boolean;
     /** An overlay was found and a button click or `Escape` made it go away. */
     dismissed: boolean;
     /** Nothing dismissed an overlay, so its `--visible` modifier was stripped and `pointer-events: none` forced on it. */
@@ -342,8 +356,10 @@ export interface OverlayClearResult {
      * why callers no longer need their own follow-up `findVisibleOverlay`.
      */
     stillBlocking: boolean;
-    /** Set whenever `neutralized` or `stillBlocking` is true; `null` on a clean dismissal or when the read itself failed. */
+    /** The latest successful read of an observed overlay; null when none was available. */
     diagnostics: OverlayDiagnostics | null;
+    /** Whether reading a visible overlay's diagnostics threw. */
+    diagnosticsReadFailed: boolean;
 }
 
 /**
@@ -431,6 +447,20 @@ export interface ScrapeOutcome {
      * abort, which keeps rejecting with `ScrapeAbortedError`.
      */
     stoppedEarly?: 'run-time-budget';
+    /**
+     * The run's stale diagnostics. Headline rates cover successful first-pass
+     * jobs; retry attempts remain in the raw records and retry counters
+     * (GitHub issue #29). Absent when
+     * `ScraperOptions.staleDiagnostics.enabled` is `false`; present — with a
+     * `staleRate` of `0` and no records — on an enabled run that scraped
+     * nothing, so "diagnostics were on and found nothing" stays
+     * distinguishable from "diagnostics were off".
+     *
+     * Also attached to the early return a spent `maxRunDurationMs` produces:
+     * a run that stopped short still observed everything it got through, and
+     * that partial evidence is exactly what a diagnostic run wants back.
+     */
+    staleReport?: StaleReport;
 }
 
 export interface CompanyMismatchCheck {
@@ -593,6 +623,13 @@ export interface ScraperOptions {
         maxAddressesPerCompany?: number;
     };
     /**
+     * Switches for the per-job stale diagnostics (GitHub issue #29): what
+     * `ScrapeOutcome.staleReport` and the two job events' `diagnostics` are
+     * built from. Omitted, collection is **on** and the DOM snapshot is off
+     * — see `StaleDiagnosticsOptions` for why that split is the default.
+     */
+    staleDiagnostics?: StaleDiagnosticsOptions;
+    /**
      * **Internal debugging option — not for regular consumers.** Lets someone
      * debugging the built package leave the job-list browser (`jobList`) and/or
      * the company-page lookup's own context (`companyPage`) open after
@@ -620,3 +657,304 @@ export interface RunScrapeOptions {
 }
 
 export type RunScraper = (options: RunScrapeOptions) => Promise<ScrapeOutcome>;
+
+/**
+ * Every combination the three staleness flags can be in, as a **closed** set
+ * of keys: `'none'`, one key per single flag, and one per pair and for the
+ * triple, with the parts always joined in the order `company` →
+ * `sourceJobId` → `lateOverlay`.
+ *
+ * Enumerable on purpose. GitHub issue #29 asks not only which combinations
+ * fire but *which never occur* — and "never occurred" is only answerable
+ * against a key set fixed up front, so `StaleReport.byCombination` carries
+ * all eight keys with explicit zeros rather than only the ones a particular
+ * run happened to hit.
+ */
+export type StaleFlagCombination =
+    | 'none'
+    | 'company'
+    | 'sourceJobId'
+    | 'lateOverlay'
+    | 'company+sourceJobId'
+    | 'company+lateOverlay'
+    | 'sourceJobId+lateOverlay'
+    | 'company+sourceJobId+lateOverlay';
+
+/**
+ * What one Playwright wait in the per-job path actually did — recorded, not
+ * acted upon.
+ *
+ * `waitForJobDetailToLoad` swallows both of its timeouts (`.catch(() => {})`)
+ * and hands whatever pane is there to the reads below it, which is the
+ * mechanism GitHub issue #29 suspects behind a third of a run coming back
+ * suspect. Nothing downstream could previously tell a wait that *resolved*
+ * from one that silently gave up, which makes this the single most important
+ * measurement the diagnostics collect.
+ */
+export interface WaitObservation {
+    /**
+     * `'resolved'` — the wait completed on its own. `'timedOut'` — it
+     * rejected and the rejection was swallowed (a `waitFor`/`waitForLoadState`
+     * has no realistic rejection other than its own timeout, so every
+     * swallowed one is recorded as this). `'skipped'` — the wait was never
+     * issued at all, which for the detail-pane title link means the clicked
+     * card had no `sourceJobId` to wait on.
+     */
+    outcome: 'resolved' | 'timedOut' | 'skipped';
+    /** Wall-clock milliseconds the wait actually took; `0` for a `'skipped'` one. */
+    elapsedMs: number;
+    /**
+     * The timeout handed to Playwright **after** `JobBudget` clamping, not
+     * the wait's own local cap. That distinction is the point: a wait cut
+     * short because the job had 300ms of budget left is a different finding
+     * from one that genuinely burned its full 8s, and only the clamped number
+     * tells them apart. `0` for a `'skipped'` wait, where nothing was handed
+     * to Playwright at all.
+     */
+    timeoutMs: number;
+}
+
+/**
+ * A raw look at the detail pane at the moment its data was read, captured in
+ * one `page.evaluate` by the internal `readDetailPaneSnapshot`.
+ *
+ * Exists to settle GitHub issue #29's first hypothesis — that LinkedIn
+ * serves an interstitial or decoy pane distinct enough from the known
+ * sign-in nag that `findVisibleOverlay` never matches it. A stale pane, a
+ * partially-rendered pane and an interstitial are indistinguishable from the
+ * scraped fields alone; they are not indistinguishable from the markup.
+ */
+export interface DetailPaneSnapshot {
+    /**
+     * The pane's `outerHTML` with all whitespace collapsed to single spaces
+     * and the result cut to `StaleDiagnosticsOptions.maxSnapshotChars` —
+     * capped in the browser, exactly like `OverlayDiagnostics.text`, so one
+     * runaway pane cannot bloat a whole run's report.
+     */
+    html: string;
+    /** The pane container's own class list in DOM order; `[]` when no container matched and the capture fell back to `document.body`. */
+    classes: string[];
+    /**
+     * The `href` of **every** detail title link on the page, in DOM order —
+     * not `.first()`. `readJobDetailPane` reads only the first one, so a pane
+     * holding two topcards at once (the old one and the new one, mid-swap)
+     * would look perfectly ordinary there. Two entries here is that finding.
+     */
+    titleLinkHrefs: string[];
+    /** The text of **every** detail-pane company link, in DOM order, kept in full for the same reason `titleLinkHrefs` is. */
+    orgNames: string[];
+    /** Whether a description element existed at all — an empty pane and a pane with an empty description are different failures. */
+    hasDescription: boolean;
+    /** Character count of the collapsed description text; `0` when `hasDescription` is false. */
+    descriptionLength: number;
+    /**
+     * The class list of every element matching `OVERLAY_SELECTOR` at read
+     * time, one array per overlay, read across the whole document rather
+     * than within the pane (LinkedIn renders its modals in a container of
+     * their own). `[]` means nothing matched — which, on a job flagged
+     * `lateOverlayDetected`, is itself evidence.
+     */
+    visibleOverlayClasses: string[][];
+}
+
+/** One overlay probe in a job, retained in chronological order. */
+export interface OverlayCheck {
+    phase: 'pre-click' | 'post-click' | 'late';
+    /** The click attempt this preceded; null outside the pre-click ladder. */
+    attempt: number | null;
+    /** False when the job budget was too small to run the clear. */
+    ran: boolean;
+    startedAt: number;
+    elapsedMs: number;
+    observed: boolean;
+    dismissed: boolean;
+    neutralized: boolean;
+    stillBlocking: boolean;
+    diagnostics: OverlayDiagnostics | null;
+    diagnosticsReadFailed: boolean;
+}
+
+export type SnapshotCaptureOutcome =
+    | 'not-requested'
+    | 'captured'
+    | 'skipped-budget'
+    | 'failed';
+
+/**
+ * Everything observed while scraping one job, recorded whether or not that
+ * job turned out stale.
+ *
+ * The healthy jobs are the denominator: without them "this combination never
+ * occurs" and "this condition co-occurs with staleness" are both
+ * unanswerable, so one of these is emitted per clicked job rather than only
+ * for the suspect ones.
+ *
+ * Fields are assigned as they are observed, onto a mutable record the
+ * recorder hands back on `finalize()` — mirroring `readJobListIdentity`'s
+ * `identity` object — so a job that throws partway still reports what it saw
+ * up to that point. A `null` here therefore means "never got that far", not
+ * "read and came back empty"; the two numeric read-offsets use `-1` for the
+ * same "never happened" reason, since `0` is a legitimate offset.
+ */
+export interface StaleDiagnostics {
+    /** Stable identity for the run, so concatenated reports never infer boundaries from array order. */
+    runId: string;
+    /** Number of list indices considered in this run after maxJobs is applied. */
+    totalJobs: number;
+    /** The job's index in the run, matching `JobResult.index`. */
+    index: number;
+    /** Which pass produced this record: the ordinary sweep, or `retryStaleJobs`' single re-scrape of an index the first pass flagged. */
+    pass: 'first' | 'retry';
+    /** The result variant this attempt ultimately produced. */
+    resultStatus: JobStatus;
+    /** The three flags below folded into one closed key; `'none'` when nothing fired. */
+    combination: StaleFlagCombination;
+    /** Exactly `JobResult.companyMismatch` for this scrape. */
+    companyMismatch: boolean;
+    /** Exactly `JobResult.sourceJobIdMismatch` for this scrape. */
+    sourceJobIdMismatch: boolean;
+    /** Exactly `JobResult.lateOverlayDetected` for this scrape. */
+    lateOverlayDetected: boolean;
+    /** The clicked card's own posting ID; `null` when the list identity was never read. */
+    sourceJobId: string | null;
+    /** The company text on the list card — the left-hand side of `companyMismatch`. */
+    listCompany: string | null;
+    /** The title text on the list card, so a leftover pane can be named against the job that was actually clicked. */
+    listTitle: string | null;
+    /** The clicked card's normalized posting URL. */
+    sourceUrl: string | null;
+    /** The company text the detail pane showed — the right-hand side of `companyMismatch`. */
+    detailCompany: string | null;
+    /** The detail pane's own title-link `href`, exactly as read (unresolved, unnormalized). */
+    detailTitleHref: string | null;
+    /**
+     * `detailTitleHref` put through the same `normalizeJobUrl` +
+     * `jobIdFromUrl` pipeline `isSourceJobIdMismatch` uses, so a leftover
+     * pane can be traced to *which* previously-clicked job it belonged to —
+     * or shown to belong to none of them. `null` when the href was missing
+     * or carried no ID.
+     */
+    detailJobId: string | null;
+    /** Epoch ms at which the click was issued; `-1` when the job never got as far as clicking. */
+    clickStartedAt: number;
+    /** How long `clickWithOverlayRetries` took, its overlay clears and retries included; `-1` when the click never completed. */
+    clickDurationMs: number;
+    /** The detail pane's title-link wait; `null` when `waitForJobDetailToLoad` was never reached. */
+    titleLinkWait: WaitObservation | null;
+    /** The `networkidle` wait; `null` when `waitForJobDetailToLoad` was never reached. */
+    networkIdleWait: WaitObservation | null;
+    /** Milliseconds from the click completing to the detail company being read; `-1` when that read never happened. */
+    msToCompanyRead: number;
+    /** Milliseconds from the click completing to the description being read; `-1` when that read never happened. */
+    msToDescriptionRead: number;
+    /** Milliseconds from the click completing to the detail title href being read; `-1` when that read never happened. */
+    msToTitleHrefRead: number;
+    /** How many click attempts `clickWithOverlayRetries` made; `0` when the click was never reached. */
+    clickAttempts: number;
+    /** Every overlay clear performed or skipped during this job, in chronological order. */
+    overlayChecks: OverlayCheck[];
+    /** Exactly `JobResult.duplicateOfIdx` — the index of this posting's first occurrence in the run, or `null`. */
+    duplicateOfIdx: number | null;
+    /**
+     * The pane's markup at read time; `null` unless
+     * `StaleDiagnosticsOptions.domSnapshot` is on *and* this job either
+     * fired a flag or `snapshotEveryJob` was set. Capturing healthy jobs too
+     * is the only way to tell a stale pane from a partially-rendered one —
+     * that comparison needs a baseline.
+     */
+    snapshot: DetailPaneSnapshot | null;
+    snapshotOutcome: SnapshotCaptureOutcome;
+    /** Error from the snapshot read when snapshotOutcome is failed; null otherwise. */
+    snapshotError: string | null;
+}
+
+/**
+ * One observable condition's stale rate with and without it — the table that
+ * is the actual deliverable of GitHub issue #29's diagnostic phase.
+ *
+ * A raw count of how often a condition appears alongside a stale job proves
+ * nothing on its own: a condition that holds for 90% of a run "co-occurs"
+ * with almost everything. Reporting both sides makes the comparison the
+ * useful one — a condition whose `withCondition.rate` is far above its
+ * `withoutCondition.rate` is a candidate mechanism; one where the two match
+ * is background.
+ */
+export interface ConditionCoOccurrence {
+    /** Stable machine-readable label, e.g. `'titleLinkWait:timedOut'`. */
+    condition: string;
+    /** Jobs where the condition held. `rate` is `stale / total`, and `0` when `total` is `0`. */
+    withCondition: { total: number; stale: number; rate: number };
+    /** Jobs where it did not. Same `rate` convention. */
+    withoutCondition: { total: number; stale: number; rate: number };
+}
+
+/**
+ * A whole run's stale diagnostics, aggregated by `summarizeStaleDiagnostics`.
+ *
+ * Built from a flat `StaleDiagnostics[]` rather than from a run object, so a
+ * consumer can concatenate the records of several runs and re-summarize them
+ * as one. Each record's runId and totalJobs keep boundaries and positions
+ * explicit rather than inferred from array order.
+ */
+export interface StaleReport {
+    /** Every record handed in, jobs that failed before the detail pane included. */
+    totalRecords: number;
+    /** Successful first-pass jobs: the denominator for staleRate and conditions. */
+    successfulJobs: number;
+    /** Successful first-pass jobs with a non-none flag combination. */
+    staleJobs: number;
+    /** `staleJobs / successfulJobs`, or `0` when no pane was ever read. The number GitHub issue #29 reports as ~0.33. */
+    staleRate: number;
+    /** Stale count per flag combination, with **all eight** keys present — the zeros are the answer to "which combinations never occur". */
+    byCombination: Record<StaleFlagCombination, number>;
+    /** Stale counts split at the midpoint of each pass's own index range, to test whether staleness is a late-in-the-run effect. */
+    byRunPosition: { firstHalf: number; secondHalf: number };
+    /** How many stale records were immediately preceded — same run, same pass, adjacent index — by a duplicate job. */
+    followedDuplicate: number;
+    /** How many stale records were immediately preceded — same run, same pass, adjacent index — by another stale job. */
+    followedStale: number;
+    /** Every maximal run of **two or more** consecutive stale indices, in order. An empty array means staleness never came in runs. */
+    clusters: { runId: string; startIndex: number; length: number }[];
+    /** The longest run of consecutive stale indices, counting an isolated stale job as `1`; `0` when nothing was stale. */
+    longestCluster: number;
+    /** Records with `pass: 'retry'`. */
+    retriesAttempted: number;
+    /** Retry records that came back clean at an index whose first pass was stale — how often the existing single retry actually rescues a job. */
+    retriesRecovered: number;
+    /** The co-occurrence table, one entry per observable condition, in a fixed order. */
+    conditions: ConditionCoOccurrence[];
+    /** Every record the report was built from, kept so a written-out report is self-contained. */
+    records: StaleDiagnostics[];
+}
+
+/**
+ * Switches for the stale-scrape diagnostics (GitHub issue #29); see
+ * `ScraperOptions.staleDiagnostics`.
+ */
+export interface StaleDiagnosticsOptions {
+    /**
+     * Whether records are collected at all. Default `true`: every field but
+     * the snapshot is a value the scrape already computed — timestamps,
+     * booleans, strings it read anyway — so collection costs no extra
+     * browser round-trips. `false` skips the recorder entirely, leaving
+     * `ScrapeOutcome.staleReport` and both job events' `diagnostics` absent
+     * and every instrumented helper byte-identical to its uninstrumented
+     * self.
+     */
+    enabled?: boolean;
+    /**
+     * Whether to capture `StaleDiagnostics.snapshot`. Default `false`: it is
+     * one extra `page.evaluate` per captured job, and the only part of these
+     * diagnostics that costs a round-trip.
+     */
+    domSnapshot?: boolean;
+    /**
+     * Whether to snapshot healthy jobs too, not just flagged ones. Default
+     * `false`. Worth turning on for a dedicated diagnostic run: telling a
+     * stale pane apart from a partially-rendered or interstitial one needs a
+     * healthy pane to compare it against. Ignored unless `domSnapshot` is on.
+     */
+    snapshotEveryJob?: boolean;
+    /** Cap on `DetailPaneSnapshot.html`, applied in the browser before the markup crosses back. Default `4000`. */
+    maxSnapshotChars?: number;
+}

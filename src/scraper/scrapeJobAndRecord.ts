@@ -1,4 +1,4 @@
-import type { JobResult } from '../types';
+import type { JobResult, StaleDiagnostics } from '../types';
 import type { ScrapeContext } from './scrapeContext';
 import { scrapeJob } from './scrapeJob';
 import { isStaleResult } from './isStaleResult';
@@ -7,11 +7,19 @@ export async function scrapeJobAndRecord(
     ctx: ScrapeContext,
     results: JobResult[],
     index: number,
-    options: { preClickDelayMs?: number } = {},
+    options: {
+        preClickDelayMs?: number;
+        /** Which pass this call belongs to; `retryStaleJobs` is the only caller that passes `'retry'`. */
+        pass?: 'first' | 'retry';
+    } = {},
 ): Promise<JobResult> {
     ctx.onProgress?.({ type: 'job:start', index, total: ctx.totalJobs });
+    // Captured on the way past rather than returned by scrapeJob, because
+    // scrapeJob emits it from its catch block too — where there is no
+    // successful return to hang it on.
+    let diagnostics: StaleDiagnostics | undefined;
     const result = await scrapeJob(ctx.page, index, {
-        ...options,
+        preClickDelayMs: options.preClickDelayMs,
         seenSourceJobIds: ctx.seenSourceJobIds,
         runTimestamp: ctx.runTimestamp,
         clickRetryAttempts: ctx.clickRetryAttempts,
@@ -27,12 +35,24 @@ export async function scrapeJobAndRecord(
         // to the caller's overlay tier policy: everything under scrapeJob is
         // several calls deep and holds no reference to either otherwise.
         overlayClear: { ...ctx.overlayClear, onProgress: ctx.onProgress },
+        staleDiagnostics: ctx.staleDiagnostics,
+        diagnosticsPass: options.pass,
+        diagnosticsRunId: ctx.runId,
+        diagnosticsTotalJobs: ctx.totalJobs,
+        // Absent when the run turned diagnostics off, which is what makes
+        // scrapeJob skip creating a recorder at all.
+        onJobDiagnostics: ctx.onJobDiagnostics
+            ? (record) => {
+                  diagnostics = record;
+                  ctx.onJobDiagnostics?.(record);
+              }
+            : undefined,
     });
     results[index] = result; // indexed write (not push) so a retry replaces, not appends
     ctx.onProgress?.(
         isStaleResult(result)
-            ? { type: 'job:stale', result }
-            : { type: 'job:done', result },
+            ? { type: 'job:stale', result, diagnostics }
+            : { type: 'job:done', result, diagnostics },
     );
     return result;
 }

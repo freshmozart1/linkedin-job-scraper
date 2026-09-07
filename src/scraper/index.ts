@@ -25,6 +25,17 @@ export { pickDismissButtonIndex } from './pickDismissButtonIndex';
 // exported so a consumer can render the same line from a progress event's
 // diagnostics instead of re-deriving the format.
 export { describeOverlayDiagnostics } from './describeOverlayDiagnostics';
+// The stale-scrape diagnostics of GitHub issue #29. Both are pure — no
+// Playwright, no clock, no page — so both are unit-testable with no browser,
+// which is the same bar pickDismissButtonIndex and describeOverlayDiagnostics
+// are exported on. summarizeStaleDiagnostics is also the only way a consumer
+// can re-aggregate several runs' records into one report, which is what the
+// issue asks for; describeStaleReport is the rendering of that, exported so
+// nobody has to re-derive the format. The recorder and the two page.evaluate
+// bodies behind them (createStaleDiagnostics, readDetailPaneSnapshot) stay
+// internal.
+export { summarizeStaleDiagnostics } from './summarizeStaleDiagnostics';
+export { describeStaleReport } from './describeStaleReport';
 export { scrollLoadPhase } from './scrollLoadPhase';
 export { clickLoadPhase } from './clickLoadPhase';
 export { registerJobOccurrence } from './registerJobOccurrence';

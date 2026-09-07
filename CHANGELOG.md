@@ -2,6 +2,20 @@
 
 All notable changes to this project are documented in this file.
 
+## v0.11.0
+
+### Added
+
+- Trustworthy stale-result diagnostics for GitHub issue #29. Every considered list index carries a self-describing `StaleDiagnostics` record with `runId`, `totalJobs`, final `resultStatus`, list/detail identities, wait timings, a phase-by-phase overlay timeline, and an explicit DOM-snapshot outcome. Diagnostics remain enabled by default; DOM snapshots remain opt-in.
+- `ScrapeOutcome.staleReport`, plus the pure `summarizeStaleDiagnostics` and `describeStaleReport` exports. Headline rates and condition correlations use successful first-pass jobs only, while retry attempts remain available in raw records and dedicated recovery counters. All eight flag combinations are reported, including zero-count combinations.
+- `scripts/diagnose-stale.ts` for repeatable single-browser and concurrent live experiments. It writes collision-proof per-search artifacts and one combined JSON report; raw DOM output remains gitignored.
+
+### Changed
+
+- `OverlayClearResult` now reports whether an overlay was observed and whether its diagnostics read failed. Per-job diagnostics retain every pre-click, post-click, and late clear, including budget-skipped checks and diagnostics from overlays that were successfully dismissed.
+- Records carry explicit run identity and total size, skipped jobs retain minimal records, and positional analysis uses exact preceding indices. Concatenated and out-of-order run records no longer rely on inferred array boundaries.
+- The package version is `0.11.0`. This release is diagnostic-only: it does not change detail-pane waits, stale detection, or retry behavior, and it does not close issue #29.
+
 ## v0.10.0
 
 ### Added

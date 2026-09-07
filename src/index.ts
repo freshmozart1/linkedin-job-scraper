@@ -22,6 +22,8 @@ export {
     clearBlockingOverlays,
     pickDismissButtonIndex,
     describeOverlayDiagnostics,
+    summarizeStaleDiagnostics,
+    describeStaleReport,
     scrollLoadPhase,
     clickLoadPhase,
     registerJobOccurrence,

@@ -8,12 +8,13 @@ import {
     JOB_LIST_SELECTOR,
     JOB_CRITERIA_VALUE_SELECTOR,
     DESCRIPTION_SELECTOR,
+    DETAIL_TITLE_LINK_SELECTOR,
     OVERLAY_SELECTOR,
     isStaleResult,
     scrapeJob,
     createRunTimeBudget,
 } from '../src';
-import type { CompanyAddress } from '../src';
+import type { CompanyAddress, StaleDiagnostics } from '../src';
 import { baseScrapeJobLocators } from './helpers/baseScrapeJobLocators';
 import { stubCompanyLookup } from './helpers/stubCompanyLookup';
 import { scrapeSingleJob } from './helpers/scrapeSingleJob';
@@ -52,10 +53,12 @@ describe('scrapeJob()', () => {
             }),
         });
 
+        const records: StaleDiagnostics[] = [];
         const result = await scrapeJob(page, 0, {
             seenSourceJobIds: new Map(),
             runTimestamp: 123,
             companyLookup: stubCompanyLookup(),
+            onJobDiagnostics: (record) => records.push(record),
         });
 
         assert.equal(result.status, 'success');
@@ -139,15 +142,22 @@ describe('scrapeJob()', () => {
             },
         });
 
+        const records: StaleDiagnostics[] = [];
         const result = await scrapeJob(page, 0, {
             seenSourceJobIds: new Map(),
             runTimestamp: 123,
             companyLookup: stubCompanyLookup(),
+            onJobDiagnostics: (record) => records.push(record),
         });
 
         assert.equal(result.status, 'success');
         assert.equal(result.lateOverlayDetected, true);
         assert.equal(isStaleResult(result), true);
+        const lateCheck = records[0]?.overlayChecks.find(
+            (check) => check.phase === 'late',
+        );
+        assert.equal(lateCheck?.observed, true);
+        assert.equal(lateCheck?.neutralized, true);
     });
     it('flags lateOverlayDetected when a late overlay was merely dismissed', async ({
         assert,
@@ -1719,6 +1729,327 @@ describe('scrapeJob()', () => {
 
             assert.equal(result.status, 'skipped');
             assert.equal(result.duplicateOfIdx, null);
+        });
+    });
+
+    describe('stale diagnostics', () => {
+        /** The stale job every test below drives: its detail pane shows a different company than the list card. */
+        const staleJobLocator = () =>
+            createFakeJobLocator({
+                title: 'Backend Developer',
+                listCompany: 'Acme',
+                sourceJobId: '222',
+                sourceUrl:
+                    'https://de.linkedin.com/jobs/view/backend-developer-at-acme-222',
+                companyUrl: 'https://de.linkedin.com/company/acme',
+                location: 'Hamburg',
+                postedAt: '2026-07-21',
+            });
+
+        it('hands a finished record to onJobDiagnostics for a job that came back stale', async ({
+            assert,
+        }) => {
+            const jobItem = staleJobLocator();
+            const page = createFakePage({
+                locatorsBySelector: {
+                    [JOB_LIST_SELECTOR]: createFakeLocator({
+                        nth: () => jobItem,
+                    }),
+                    ...baseScrapeJobLocators(() => 'Globex Corporation'),
+                },
+                defaultLocator: createFakeLocator({
+                    waitFor: () => {},
+                    isVisible: () => false,
+                }),
+            });
+            const records: StaleDiagnostics[] = [];
+
+            const result = await scrapeJob(page, 3, {
+                seenSourceJobIds: new Map(),
+                runTimestamp: 123,
+                companyLookup: stubCompanyLookup(),
+                onJobDiagnostics: (record) => records.push(record),
+            });
+
+            assert.equal(result.status, 'success');
+            assert.equal(records.length, 1);
+            const record = records[0]!;
+            assert.equal(record.index, 3);
+            assert.equal(record.pass, 'first');
+            assert.equal(record.resultStatus, 'success');
+            assert.equal(record.runId, 'direct-123');
+            assert.equal(record.totalJobs, 4);
+            // Derived from the same three flags the result carries, never
+            // judged a second time.
+            assert.equal(record.combination, 'company');
+            assert.equal(record.companyMismatch, true);
+            // Both sides of the comparison, so a leftover pane can be traced
+            // back to whichever job it actually belonged to.
+            assert.equal(record.listCompany, 'Acme');
+            assert.equal(record.detailCompany, 'Globex Corporation');
+            assert.equal(record.listTitle, 'Backend Developer');
+            assert.equal(record.sourceJobId, '222');
+            assert.equal(record.clickAttempts, 1);
+            assert.equal(record.titleLinkWait?.outcome, 'resolved');
+            assert.equal(record.networkIdleWait?.outcome, 'resolved');
+            assert.equal(record.snapshot, null); // domSnapshot defaults off
+            assert.equal(record.snapshotOutcome, 'not-requested');
+            assert.deepEqual(
+                record.overlayChecks.map((check) => check.phase),
+                ['pre-click', 'post-click', 'late'],
+            );
+            assert.equal(
+                record.overlayChecks.every(
+                    (check) => check.ran && !check.observed,
+                ),
+                true,
+            );
+        });
+
+        it('still emits a record for a job that failed before its detail pane was read', async ({
+            assert,
+        }) => {
+            // A failure is often the more informative record of the two, and
+            // dropping it would bias the report: the conditions being
+            // correlated are the same ones that make a job fail.
+            const jobItem = createFakeJobLocator({
+                title: 'Backend Developer',
+                listCompany: 'Acme',
+                sourceJobId: '222',
+                sourceUrl: null, // readJobListIdentity throws on the href read
+                location: 'Hamburg',
+                postedAt: '2026-07-21',
+            });
+            const records: StaleDiagnostics[] = [];
+
+            const result = await scrapeJob(
+                createFakePage({
+                    locatorsBySelector: {
+                        [JOB_LIST_SELECTOR]: createFakeLocator({
+                            nth: () => jobItem,
+                        }),
+                        ...baseScrapeJobLocators(() => 'Acme'),
+                    },
+                    defaultLocator: createFakeLocator({
+                        waitFor: () => {},
+                        isVisible: () => false,
+                    }),
+                }),
+                0,
+                {
+                    seenSourceJobIds: new Map(),
+                    runTimestamp: 123,
+                    companyLookup: stubCompanyLookup(),
+                    onJobDiagnostics: (record) => records.push(record),
+                },
+            );
+
+            assertFailed(result);
+            assert.equal(records.length, 1);
+            const record = records[0]!;
+            // Never got as far as the pane, and every "never happened" field
+            // says so in its own vocabulary: null for what was not read, -1
+            // for a duration that never elapsed.
+            assert.equal(record.detailCompany, null);
+            assert.equal(record.clickStartedAt, -1);
+            assert.equal(record.clickDurationMs, -1);
+            assert.equal(record.msToCompanyRead, -1);
+            assert.equal(record.titleLinkWait, null);
+            assert.equal(record.combination, 'none');
+            assert.equal(record.resultStatus, 'failed');
+        });
+
+        it('emits a minimal skipped record so run indices remain complete', async ({
+            assert,
+        }) => {
+            const jobItem = staleJobLocator();
+            const records: StaleDiagnostics[] = [];
+            const page = createFakePage({
+                locatorsBySelector: {
+                    [JOB_LIST_SELECTOR]: createFakeLocator({ nth: () => jobItem }),
+                },
+            });
+
+            const result = await scrapeJob(page, 4, {
+                seenSourceJobIds: new Map(),
+                runTimestamp: 123,
+                companyLookup: stubCompanyLookup(),
+                shouldScrapeJob: () => false,
+                onJobDiagnostics: (record) => records.push(record),
+            });
+
+            assert.equal(result.status, 'skipped');
+            assert.equal(records.length, 1);
+            assert.equal(records[0]?.resultStatus, 'skipped');
+            assert.equal(records[0]?.index, 4);
+            assert.deepEqual(records[0]?.overlayChecks, []);
+            assert.equal(records[0]?.snapshotOutcome, 'not-requested');
+        });
+
+        it('records a swallowed title-link timeout without changing what the job returns', async ({
+            assert,
+        }) => {
+            // The point of this phase is to REPORT the silent give-up that
+            // GitHub issue #29 suspects, not to change what happens on it —
+            // so the result has to come back exactly as it always did.
+            const jobItem = staleJobLocator();
+            const page = createFakePage({
+                locatorsBySelector: {
+                    [JOB_LIST_SELECTOR]: createFakeLocator({
+                        nth: () => jobItem,
+                    }),
+                    [`${DETAIL_TITLE_LINK_SELECTOR}[href*="-222"]`]:
+                        createFakeLocator({
+                            waitFor: () => {
+                                throw new Error(
+                                    'locator.waitFor: Timeout 8000ms exceeded',
+                                );
+                            },
+                        }),
+                    ...baseScrapeJobLocators(() => 'Globex Corporation'),
+                },
+                defaultLocator: createFakeLocator({
+                    waitFor: () => {},
+                    isVisible: () => false,
+                }),
+            });
+            const records: StaleDiagnostics[] = [];
+
+            const result = await scrapeJob(page, 0, {
+                seenSourceJobIds: new Map(),
+                runTimestamp: 123,
+                companyLookup: stubCompanyLookup(),
+                onJobDiagnostics: (record) => records.push(record),
+            });
+
+            assert.equal(result.status, 'success');
+            assert.equal(isStaleResult(result), true);
+            assert.equal(records[0]?.titleLinkWait?.outcome, 'timedOut');
+            // The clamped value Playwright was actually handed, so a wait cut
+            // short by a spent budget stays distinguishable from one that
+            // genuinely ran out.
+            assert.equal(records[0]?.titleLinkWait?.timeoutMs, 8000);
+        });
+
+        it('captures a DOM snapshot for a flagged job when domSnapshot is on', async ({
+            assert,
+        }) => {
+            const snapshot = {
+                html: '<section class="detail">…</section>',
+                classes: ['two-pane-serp-page__detail-view'],
+                titleLinkHrefs: ['/jobs/view/someone-elses-job-999'],
+                orgNames: ['Globex Corporation'],
+                hasDescription: true,
+                descriptionLength: 42,
+                visibleOverlayClasses: [],
+            };
+            let evaluateCalls = 0;
+            const jobItem = staleJobLocator();
+            const page = createFakePage({
+                evaluate: () => {
+                    evaluateCalls += 1;
+                    return snapshot;
+                },
+                locatorsBySelector: {
+                    [JOB_LIST_SELECTOR]: createFakeLocator({
+                        nth: () => jobItem,
+                    }),
+                    ...baseScrapeJobLocators(() => 'Globex Corporation'),
+                },
+                defaultLocator: createFakeLocator({
+                    waitFor: () => {},
+                    isVisible: () => false,
+                }),
+            });
+            const records: StaleDiagnostics[] = [];
+
+            await scrapeJob(page, 0, {
+                seenSourceJobIds: new Map(),
+                runTimestamp: 123,
+                companyLookup: stubCompanyLookup(),
+                staleDiagnostics: { domSnapshot: true },
+                onJobDiagnostics: (record) => records.push(record),
+            });
+
+            // Exactly one round-trip: the mismatch already fired, so the
+            // second capture site never runs.
+            assert.equal(evaluateCalls, 1);
+            assert.deepEqual(records[0]?.snapshot, snapshot);
+            assert.equal(records[0]?.snapshotOutcome, 'captured');
+            assert.equal(records[0]?.snapshotError, null);
+        });
+
+        it('reports a failed snapshot without failing the job', async ({
+            assert,
+        }) => {
+            const jobItem = staleJobLocator();
+            const page = createFakePage({
+                evaluate: () => {
+                    throw new Error('browser context disappeared');
+                },
+                locatorsBySelector: {
+                    [JOB_LIST_SELECTOR]: createFakeLocator({ nth: () => jobItem }),
+                    ...baseScrapeJobLocators(() => 'Globex Corporation'),
+                },
+                defaultLocator: createFakeLocator({
+                    waitFor: () => {},
+                    isVisible: () => false,
+                }),
+            });
+            const records: StaleDiagnostics[] = [];
+
+            const result = await scrapeJob(page, 0, {
+                seenSourceJobIds: new Map(),
+                runTimestamp: 123,
+                companyLookup: stubCompanyLookup(),
+                staleDiagnostics: { domSnapshot: true },
+                onJobDiagnostics: (record) => records.push(record),
+            });
+
+            assert.equal(result.status, 'success');
+            assert.equal(records[0]?.snapshotOutcome, 'failed');
+            assert.equal(
+                records[0]?.snapshotError,
+                'browser context disappeared',
+            );
+        });
+
+        it('is entirely inert when no onJobDiagnostics was passed', async ({
+            assert,
+        }) => {
+            // The whole instrumentation is optional trailing parameters, so a
+            // direct caller of the exported scrapeJob runs the code it always
+            // ran — not even the one page.evaluate a snapshot would cost,
+            // even with domSnapshot explicitly on.
+            let evaluateCalls = 0;
+            const jobItem = staleJobLocator();
+            const page = createFakePage({
+                evaluate: () => {
+                    evaluateCalls += 1;
+                    return null;
+                },
+                locatorsBySelector: {
+                    [JOB_LIST_SELECTOR]: createFakeLocator({
+                        nth: () => jobItem,
+                    }),
+                    ...baseScrapeJobLocators(() => 'Globex Corporation'),
+                },
+                defaultLocator: createFakeLocator({
+                    waitFor: () => {},
+                    isVisible: () => false,
+                }),
+            });
+
+            const result = await scrapeJob(page, 0, {
+                seenSourceJobIds: new Map(),
+                runTimestamp: 123,
+                companyLookup: stubCompanyLookup(),
+                staleDiagnostics: { domSnapshot: true, snapshotEveryJob: true },
+            });
+
+            assert.equal(evaluateCalls, 0);
+            assert.equal(result.status, 'success');
+            assert.equal(isStaleResult(result), true);
         });
     });
 });

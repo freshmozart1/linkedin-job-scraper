@@ -10,6 +10,7 @@ Every search parameter is caller-supplied — there are no fixed defaults for lo
 - [`SearchParams`](#searchparams)
 - [`ScraperOptions`](#scraperoptions)
   - [Time budgets](#time-budgets)
+  - [Stale diagnostics](#stale-diagnostics)
 - [Return value: `ScrapeOutcome`](#return-value-scrapeoutcome)
   - [Field reference](#field-reference)
   - [`companyAddresses` shape](#companyaddresses-shape)
@@ -123,6 +124,44 @@ scraperOptions: {
 }
 ```
 
+### Stale diagnostics
+
+Every considered list index is recorded, including failed and pre-click-skipped jobs, and retry attempts are retained as separate records. The run's records are aggregated into [`ScrapeOutcome.staleReport`](#return-value-scrapeoutcome). This is observation only: nothing here changes a wait, a retry or a staleness flag.
+
+```ts
+scraperOptions: {
+  staleDiagnostics: {
+    enabled: true,             // default; false skips collection entirely
+    domSnapshot: false,        // default; capture the detail pane's markup for flagged jobs
+    snapshotEveryJob: false,   // default; snapshot healthy jobs too, as a baseline
+    maxSnapshotChars: 4000,    // default; cap applied in the browser
+  },
+}
+```
+
+Collection is on by default because everything but the snapshot is a value the scrape already computed — timestamps, booleans, strings it read anyway — so it costs no extra browser round-trips. `domSnapshot` is off by default because it is one extra `page.evaluate` per captured job, and it is the only part that does.
+
+Each `StaleDiagnostics` record names its `runId`, `totalJobs`, pass and final `resultStatus`; compares the clicked card's identity with what the pane showed; records both detail-pane waits and read timings; and carries an `overlayChecks` timeline for every pre-click, post-click and late clear. Snapshot capture reports `not-requested`, `captured`, `skipped-budget` or `failed`, with an error for failures, so missing evidence is attributable. The same record is attached to that job's `job:done` / `job:stale` event.
+
+`summarizeStaleDiagnostics` and `describeStaleReport` are exported and pure, so several runs' records can be concatenated and re-summarized as one:
+
+```ts
+import { summarizeStaleDiagnostics, describeStaleReport } from 'linkedin-job-scraper';
+
+const combined = summarizeStaleDiagnostics([...runA.records, ...runB.records]);
+console.log(describeStaleReport(combined));
+```
+
+Headline counts, flag combinations, positions and `StaleReport.conditions` use successful first-pass jobs only: a retry is evidence about recovery, not another job in the denominator, and a failed result is never stale. Retry records remain available under `records` and in `retriesAttempted` / `retriesRecovered`. Run boundaries come from `runId`, halves from `totalJobs`, and predecessor conditions only from the exact preceding index.
+
+`scripts/diagnose-stale.ts` drives all of this against the live site. It is not part of the published package:
+
+```bash
+npx tsx scripts/diagnose-stale.ts --runs 3 --keyword "software engineer" --location Berlin --jobs 30
+```
+
+It writes one collision-proof JSON per run and keyword plus a combined JSON report under `diagnostics/`, and prints the combined report at the end.
+
 ## Return value: `ScrapeOutcome`
 
 `runScrape` resolves once every job has been scraped and the browser it launched has been closed. If the run throws, nothing is returned — collect partial data from `onProgress` as the run goes, or, for a cancelled run specifically, from the thrown `ScrapeAbortedError` itself (see [Cancellation](#cancellation) below). The one case that resolves *without* every job having been scraped is `scraperOptions.maxRunDurationMs` running out, which is flagged by `stoppedEarly`.
@@ -132,8 +171,11 @@ interface ScrapeOutcome {
   results: JobResult[];
   url: string; // the exact LinkedIn guest search URL that was loaded
   stoppedEarly?: 'run-time-budget';
+  staleReport?: StaleReport;
 }
 ```
+
+`staleReport` is absent only when [`staleDiagnostics.enabled`](#stale-diagnostics) is `false`; an enabled run that scraped nothing still reports an empty one, so "collected nothing" stays distinguishable from "nobody asked". It is attached to the `stoppedEarly` return too — a run that stopped short still observed everything it got through.
 
 `stoppedEarly` is absent on a run that scraped every job it found — which is every run that doesn't set [`maxRunDurationMs`](#time-budgets). It is `'run-time-budget'` when that budget ran out first, in which case `results` is short of the `total` reported by `jobs:found` (and is `[]` when the budget expired during the job-loading phase, before any job was scraped or `jobs:found` was even emitted). Existing consumers are unaffected: the field is additive, and a run without a run budget can never set it.
 
@@ -353,8 +395,8 @@ type ScrapeProgressEvent =
   | { type: 'jobs:loading'; count: number }
   | { type: 'jobs:found'; total: number }
   | { type: 'job:start'; index: number; total: number }
-  | { type: 'job:done'; result: JobResult }
-  | { type: 'job:stale'; result: JobResult }
+  | { type: 'job:done'; result: JobResult; diagnostics?: StaleDiagnostics }
+  | { type: 'job:stale'; result: JobResult; diagnostics?: StaleDiagnostics }
   | {
       type: 'overlay:undismissed';
       neutralized: boolean;
@@ -368,6 +410,8 @@ type ScrapeProgressEvent =
 - `job:done` — a job finished scraping and the result looks trustworthy. This is also the event a `status: 'failed'` job emits — check `result.status`, don't assume done means scraped.
 - `overlay:undismissed` — a blocking overlay could not be closed by clicking a control inside it or by pressing `Escape`, so it was either forcibly neutralized (`neutralized: true` — its `--visible` modifier stripped and `pointer-events`/`visibility` forced off, which unblocks the page) or was still there when the clear gave up (`neutralized: false`). `diagnostics` carries what the overlay was — its collapsed text, its full class list, and the accessible name of every control inside it — or `null` if the read itself failed. Not tied to a job index, and *not* emitted on the ordinary path where a click or `Escape` closed the overlay: that happens on virtually every guest page load. A single stuck overlay can emit this several times for one job, since each clear site reports independently.
 - `job:stale` — a job finished scraping but `isStaleResult(result)` is true: the scrape succeeded, yet the detail-pane company disagreed with the list, the detail pane's own job ID disagreed with the clicked job's, or an overlay was over the pane when the data was read (whether or not it was then closed — see `lateOverlayDetected` above). Emitted *instead of* `job:done` for that job, never both.
+
+Both `job:done` and `job:stale` carry `diagnostics`, absent only when [`staleDiagnostics.enabled`](#stale-diagnostics) is `false`. A skipped job carries a minimal record so positions and exact predecessor relationships remain truthful, but it is excluded from stale-rate denominators.
 
 Each job emits exactly one `job:start`, then exactly one of `job:done`/`job:stale`. Stale jobs get a single retry pass after the whole list has been scraped once, which re-emits the full trio for the same `index` — so a caller keying on `index` should overwrite, not append, and `total` is an upper bound on progress rather than an event count. `result` is the same object written into `outcome.results[index]`.
 

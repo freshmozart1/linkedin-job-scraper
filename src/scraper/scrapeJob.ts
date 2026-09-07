@@ -4,6 +4,8 @@ import type {
     JobResult,
     RunTimeBudget,
     ShouldScrapeJob,
+    StaleDiagnostics,
+    StaleDiagnosticsOptions,
 } from '../types';
 import type { CompanyLookup } from '../companyLookup';
 import { JOB_CRITERIA_VALUE_SELECTOR } from '../selectors';
@@ -22,6 +24,7 @@ import { waitForJobDetailToLoad } from './waitForJobDetailToLoad';
 import { readJobDetailPane } from './readJobDetailPane';
 import { trim } from './trim';
 import { createJobBudget } from './jobBudget';
+import { createStaleDiagnostics } from './createStaleDiagnostics';
 
 export interface ScrapeJobOptions {
     preClickDelayMs?: number;
@@ -58,6 +61,31 @@ export interface ScrapeJobOptions {
      * from down here. See `createJobBudget`.
      */
     runTimeBudget?: RunTimeBudget;
+    /**
+     * Snapshot switches for this job's stale diagnostics; see
+     * `ScraperOptions.staleDiagnostics`. Whether diagnostics run at all is
+     * decided by `onJobDiagnostics` being present, not by `enabled` here —
+     * resolving that once, in `runScrape`, keeps a job from collecting a
+     * record nothing will ever read.
+     */
+    staleDiagnostics?: StaleDiagnosticsOptions;
+    /** Which pass this scrape belongs to; only `retryStaleJobs` passes `'retry'`. Defaults to `'first'`. */
+    diagnosticsPass?: 'first' | 'retry';
+    /** Run metadata supplied by runScrape; direct callers get one-job defaults. */
+    diagnosticsRunId?: string;
+    diagnosticsTotalJobs?: number;
+    /**
+     * Where this job's finished diagnostics record goes. Present ⇒ the
+     * recorder is created and threaded through every helper below; absent ⇒
+     * none is, and every one of them runs the code it ran before this
+     * existed.
+     *
+     * A callback rather than a return value, mirroring how
+     * `overlayClear.onProgress` is threaded: the helpers several calls deep
+     * hold no other route back to the run, and the record has to survive the
+     * `catch` below — where there is no successful return to attach it to.
+     */
+    onJobDiagnostics?: (record: StaleDiagnostics) => void;
 }
 
 export async function scrapeJob(
@@ -74,6 +102,28 @@ export async function scrapeJob(
         signal: options.signal,
         runTimeBudget: options.runTimeBudget,
     });
+    // Created alongside the budget and threaded exactly the way it is: an
+    // optional trailing argument on each helper, so a caller that wants no
+    // diagnostics (no `onJobDiagnostics`) leaves every one of them running
+    // the code it ran before. Mutable and assigned into rather than built on
+    // the way out — a job that throws partway still has to hand back what it
+    // observed, which is the whole point of GitHub issue #29's phase one.
+    const diagnostics = options.onJobDiagnostics
+        ? createStaleDiagnostics({
+              runId:
+                  options.diagnosticsRunId ??
+                  `direct-${options.runTimestamp}`,
+              totalJobs: options.diagnosticsTotalJobs ?? index + 1,
+              index,
+              pass: options.diagnosticsPass,
+              settings: options.staleDiagnostics,
+          })
+        : undefined;
+    // Both exits below go through here, so the record is emitted exactly once
+    // per job whichever way the job ends.
+    const finalize = (): void => {
+        if (diagnostics) options.onJobDiagnostics?.(diagnostics.finalize());
+    };
     // Hoisted so the catch below can return whatever identity was captured
     // before a later failure, instead of losing it along with the rest of
     // the job.
@@ -110,6 +160,15 @@ export async function scrapeJob(
             );
         budget.check();
         await readJobListIdentity(jobItem, page, identity, budget);
+        // The clicked job's own identity, recorded before anything can go
+        // wrong further down: it is the left-hand side of every comparison in
+        // the report — which job was asked for, versus which one the pane
+        // actually showed.
+        diagnostics?.record({
+            sourceJobId: identity.sourceJobId,
+            listTitle: identity.title,
+            sourceUrl: identity.sourceUrl,
+        });
         // readJobListIdentity only returns without throwing once every field on
         // `identity` is populated, so these are safe to assert non-null here.
         const title = identity.title as string;
@@ -131,11 +190,17 @@ export async function scrapeJob(
         };
 
         if (options.shouldScrapeJob && !options.shouldScrapeJob(cardIdentity)) {
-            return buildSkippedResult(
+            const skipped = buildSkippedResult(
                 index,
                 cardIdentity,
                 options.seenSourceJobIds,
             );
+            diagnostics?.record({
+                resultStatus: 'skipped',
+                duplicateOfIdx: skipped.duplicateOfIdx,
+            });
+            finalize();
+            return skipped;
         }
 
         // Duplicates (repeated pages from LinkedIn's list-loading pagination) are
@@ -146,19 +211,33 @@ export async function scrapeJob(
             sourceJobId,
             index,
         );
+        diagnostics?.record({ duplicateOfIdx });
 
         if (options.preClickDelayMs) await sleep(options.preClickDelayMs);
 
         budget.check();
+        // Timed here rather than inside clickWithOverlayRetries: the zero
+        // point every detail-pane read offset is measured from is the moment
+        // the click *finished*, overlay clears and retries included, and only
+        // this frame sees both ends of that.
+        const clickStartedAt = Date.now();
+        diagnostics?.record({ clickStartedAt });
         await clickWithOverlayRetries(jobItem, page, {
             maxAttempts: options.clickRetryAttempts,
             overlayClear: options.overlayClear,
             budget,
+            diagnostics,
         });
+        diagnostics?.record({ clickDurationMs: Date.now() - clickStartedAt });
         budget.check();
-        await dismissOverlayAfterClick(page, options.overlayClear, budget);
+        await dismissOverlayAfterClick(
+            page,
+            options.overlayClear,
+            budget,
+            diagnostics,
+        );
         budget.check();
-        await waitForJobDetailToLoad(page, sourceJobId, budget);
+        await waitForJobDetailToLoad(page, sourceJobId, budget, diagnostics);
         budget.check();
         const {
             company,
@@ -172,6 +251,7 @@ export async function scrapeJob(
             sourceJobId,
             options.overlayClear,
             budget,
+            diagnostics,
         );
 
         // Deliberately after readJobDetailPane's checkForLateOverlay: that check
@@ -202,6 +282,8 @@ export async function scrapeJob(
             budget.check();
             throw new Error('No job criteria found for job item');
         }
+        diagnostics?.record({ resultStatus: 'success' });
+        finalize();
         return {
             index,
             title,
@@ -229,6 +311,15 @@ export async function scrapeJob(
         // rather than vanishing, and still emits the usual job:done upstream.
         // For an abort that means the in-flight job keeps an honest slot in
         // ScrapeAbortedError's `partial.results`.
+        //
+        // The diagnostics record is emitted here too. A job that failed still
+        // observed something — which wait timed out, how many click attempts
+        // it burned, what the pane held when it gave up — and a failure is
+        // very often the more informative record of the two. Dropping it
+        // would also quietly bias the report, since the conditions being
+        // correlated are the same ones that make a job fail.
+        diagnostics?.record({ resultStatus: 'failed' });
+        finalize();
         return {
             index,
             title: identity.title,

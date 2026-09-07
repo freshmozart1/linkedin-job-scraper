@@ -91,9 +91,11 @@ export async function clearBlockingOverlays(
     }: OverlayClearOptions = {},
 ): Promise<OverlayClearResult> {
     const deadline = Date.now() + timeoutMs;
+    let observed = false;
     let dismissed = false;
     let neutralized = false;
     let diagnostics: OverlayDiagnostics | null = null;
+    let diagnosticsReadFailed = false;
     let consecutiveNotVisible = 0;
     let failedRounds = 0;
     let confirmedClear = false;
@@ -111,6 +113,7 @@ export async function clearBlockingOverlays(
             continue;
         }
 
+        observed = true;
         consecutiveNotVisible = 0;
         // Neutralizing needs a round of its own to run in, so it triggers
         // while there is still budget left rather than after the loop has
@@ -128,10 +131,14 @@ export async function clearBlockingOverlays(
         // The result is kept across rounds: a later read can come back null
         // (the page navigated mid-evaluate), and stale-but-real diagnostics
         // beat none at all when this ends up reporting a failure.
-        const read: OverlayDiagnostics | null =
-            escalate && diagnostics
-                ? null
-                : await readOverlayDiagnostics(page).catch(() => null);
+        let read: OverlayDiagnostics | null = null;
+        if (!(escalate && diagnostics)) {
+            try {
+                read = await readOverlayDiagnostics(page);
+            } catch {
+                diagnosticsReadFailed = true;
+            }
+        }
         if (read) diagnostics = read;
 
         if (escalate) {
@@ -203,7 +210,11 @@ export async function clearBlockingOverlays(
         : (await findVisibleOverlay(page)) !== null;
 
     if (stillBlocking && !diagnostics) {
-        diagnostics = await readOverlayDiagnostics(page).catch(() => null);
+        try {
+            diagnostics = await readOverlayDiagnostics(page);
+        } catch {
+            diagnosticsReadFailed = true;
+        }
     }
     // Emitted once per call, and only past the button/Escape tiers: a
     // dismissal on the ordinary path happens on virtually every guest page
@@ -217,9 +228,11 @@ export async function clearBlockingOverlays(
     }
 
     return {
+        observed,
         dismissed,
         neutralized,
         stillBlocking,
-        diagnostics: neutralized || stillBlocking ? diagnostics : null,
+        diagnostics,
+        diagnosticsReadFailed,
     };
 }
