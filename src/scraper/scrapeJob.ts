@@ -25,6 +25,7 @@ import { readJobDetailPane } from './readJobDetailPane';
 import { trim } from './trim';
 import { createJobBudget } from './jobBudget';
 import { createStaleDiagnostics } from './createStaleDiagnostics';
+import { DetailPaneIdentityError } from './DetailPaneIdentityError';
 
 export interface ScrapeJobOptions {
     preClickDelayMs?: number;
@@ -215,29 +216,52 @@ export async function scrapeJob(
 
         if (options.preClickDelayMs) await sleep(options.preClickDelayMs);
 
-        budget.check();
-        // Timed here rather than inside clickWithOverlayRetries: the zero
-        // point every detail-pane read offset is measured from is the moment
-        // the click *finished*, overlay clears and retries included, and only
-        // this frame sees both ends of that.
-        const clickStartedAt = Date.now();
-        diagnostics?.record({ clickStartedAt });
-        await clickWithOverlayRetries(jobItem, page, {
-            maxAttempts: options.clickRetryAttempts,
-            overlayClear: options.overlayClear,
-            budget,
-            diagnostics,
-        });
-        diagnostics?.record({ clickDurationMs: Date.now() - clickStartedAt });
-        budget.check();
-        await dismissOverlayAfterClick(
-            page,
-            options.overlayClear,
-            budget,
-            diagnostics,
-        );
-        budget.check();
-        await waitForJobDetailToLoad(page, sourceJobId, budget, diagnostics);
+        const activateAndVerify = async (
+            attempt: 'initial' | 'immediate-reclick',
+        ) => {
+            budget.check();
+            // Reassigned on recovery deliberately: the detail-read offsets are
+            // measured from the activation that actually produced the trusted
+            // pane, while detailIdentityChecks retains both wait outcomes.
+            const clickStartedAt = Date.now();
+            diagnostics?.record({ clickStartedAt });
+            await clickWithOverlayRetries(jobItem, page, {
+                maxAttempts: options.clickRetryAttempts,
+                overlayClear: options.overlayClear,
+                budget,
+                diagnostics,
+            });
+            diagnostics?.record({
+                clickDurationMs: Date.now() - clickStartedAt,
+            });
+            budget.check();
+            await dismissOverlayAfterClick(
+                page,
+                options.overlayClear,
+                budget,
+                diagnostics,
+            );
+            budget.check();
+            return waitForJobDetailToLoad(
+                page,
+                sourceJobId,
+                budget,
+                diagnostics,
+                attempt,
+            );
+        };
+
+        let detailIdentity = await activateAndVerify('initial');
+        if (!detailIdentity.matched) {
+            detailIdentity = await activateAndVerify('immediate-reclick');
+        }
+        if (!detailIdentity.matched) {
+            budget.check();
+            throw new DetailPaneIdentityError(
+                sourceJobId,
+                detailIdentity.detailJobId,
+            );
+        }
         budget.check();
         const {
             company,
@@ -340,6 +364,9 @@ export async function scrapeJob(
             location: identity.location,
             postedAt: identity.postedAt,
             tags: null,
+            ...(error instanceof DetailPaneIdentityError
+                ? { failureReason: error.failureReason }
+                : {}),
         };
     }
 }

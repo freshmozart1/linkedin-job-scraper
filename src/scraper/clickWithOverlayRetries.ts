@@ -132,8 +132,6 @@ export async function clickWithOverlayRetries(
             }
         }
     } finally {
-        diagnostics?.record({
-            clickAttempts: attempts,
-        });
+        diagnostics?.addClickAttempts(attempts);
     }
 }

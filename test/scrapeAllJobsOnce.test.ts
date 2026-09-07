@@ -12,6 +12,7 @@ describe('scrapeAllJobsOnce()', () => {
         assert,
     }) => {
         let currentDetailCompany = 'Acme';
+        let currentDetailJobId = '111';
         const cleanJob = createFakeJobLocator({
             title: 'Frontend Developer',
             listCompany: 'Acme',
@@ -23,6 +24,7 @@ describe('scrapeAllJobsOnce()', () => {
             postedAt: '2026-07-21',
             onClick: () => {
                 currentDetailCompany = 'Acme';
+                currentDetailJobId = '111';
             },
         });
         const staleJob = createFakeJobLocator({
@@ -36,6 +38,7 @@ describe('scrapeAllJobsOnce()', () => {
             postedAt: '2026-07-21',
             onClick: () => {
                 currentDetailCompany = 'Globex Corporation';
+                currentDetailJobId = '222';
             },
         });
         const jobLocators = [cleanJob, staleJob];
@@ -44,7 +47,12 @@ describe('scrapeAllJobsOnce()', () => {
                 [JOB_LIST_SELECTOR]: createFakeLocator({
                     nth: (index) => jobLocators[index]!,
                 }),
-                ...baseScrapeJobLocators(() => currentDetailCompany),
+                ...baseScrapeJobLocators(
+                    () => currentDetailCompany,
+                    'A description.',
+                    ['Full-time'],
+                    () => currentDetailJobId,
+                ),
             },
             defaultLocator: createFakeLocator({
                 waitFor: () => {},
@@ -67,10 +75,65 @@ describe('scrapeAllJobsOnce()', () => {
         assert.deepEqual(staleIndices, [1]);
     });
 
+    it('collects an identity-gate failure for deferred retry and lets a later pass replace it', async ({
+        assert,
+    }) => {
+        let detailJobId = '111';
+        const jobItem = createFakeJobLocator({
+            title: 'Backend Developer',
+            listCompany: 'Acme',
+            sourceJobId: '222',
+            sourceUrl:
+                'https://www.linkedin.com/jobs/view/backend-developer-at-acme-222',
+            companyUrl: 'https://de.linkedin.com/company/acme',
+            location: 'Hamburg',
+            postedAt: '2026-07-21',
+        });
+        const page = createFakePage({
+            locatorsBySelector: {
+                [JOB_LIST_SELECTOR]: createFakeLocator({ nth: () => jobItem }),
+                ...baseScrapeJobLocators(
+                    () => 'Acme',
+                    'A description.',
+                    ['Full-time'],
+                    () => detailJobId,
+                ),
+            },
+            defaultLocator: createFakeLocator({
+                waitFor: () => {},
+                isVisible: () => false,
+            }),
+        });
+        const results: JobResult[] = [];
+        const ctx = {
+            page,
+            totalJobs: 1,
+            seenSourceJobIds: new Map<string, number>(),
+            runTimestamp: 123,
+            delayBetweenJobsMs: 0,
+            companyLookup: stubCompanyLookup(),
+        };
+
+        const retryIndices = await scrapeAllJobsOnce(ctx, results);
+        assert.deepEqual(retryIndices, [0]);
+        const failed = results[0]!;
+        assertFailed(failed);
+        assert.equal(
+            failed.failureReason,
+            'detail-pane-identity-unverified',
+        );
+
+        detailJobId = '222';
+        const secondPassRetryIndices = await scrapeAllJobsOnce(ctx, results);
+        assert.deepEqual(secondPassRetryIndices, []);
+        assert.equal(results[0]?.status, 'success');
+    });
+
     it('emits job:done for a clean result and job:stale for a stale one', async ({
         assert,
     }) => {
         let currentDetailCompany = 'Acme';
+        let currentDetailJobId = '111';
         const cleanJob = createFakeJobLocator({
             title: 'Frontend Developer',
             listCompany: 'Acme',
@@ -82,6 +145,7 @@ describe('scrapeAllJobsOnce()', () => {
             postedAt: '2026-07-21',
             onClick: () => {
                 currentDetailCompany = 'Acme';
+                currentDetailJobId = '111';
             },
         });
         const staleJob = createFakeJobLocator({
@@ -95,6 +159,7 @@ describe('scrapeAllJobsOnce()', () => {
             postedAt: '2026-07-21',
             onClick: () => {
                 currentDetailCompany = 'Globex Corporation';
+                currentDetailJobId = '222';
             },
         });
         const jobLocators = [cleanJob, staleJob];
@@ -103,7 +168,12 @@ describe('scrapeAllJobsOnce()', () => {
                 [JOB_LIST_SELECTOR]: createFakeLocator({
                     nth: (index) => jobLocators[index]!,
                 }),
-                ...baseScrapeJobLocators(() => currentDetailCompany),
+                ...baseScrapeJobLocators(
+                    () => currentDetailCompany,
+                    'A description.',
+                    ['Full-time'],
+                    () => currentDetailJobId,
+                ),
             },
             defaultLocator: createFakeLocator({
                 waitFor: () => {},
@@ -157,7 +227,12 @@ describe('scrapeAllJobsOnce()', () => {
                 [JOB_LIST_SELECTOR]: createFakeLocator({
                     nth: (index) => jobLocators[index]!,
                 }),
-                ...baseScrapeJobLocators(() => currentDetailCompany),
+                ...baseScrapeJobLocators(
+                    () => currentDetailCompany,
+                    'A description.',
+                    ['Full-time'],
+                    '222',
+                ),
             },
             defaultLocator: createFakeLocator({
                 waitFor: () => {},
@@ -224,7 +299,12 @@ describe('scrapeAllJobsOnce()', () => {
                 [JOB_LIST_SELECTOR]: createFakeLocator({
                     nth: (index) => jobLocators[index]!,
                 }),
-                ...baseScrapeJobLocators(() => currentDetailCompany),
+                ...baseScrapeJobLocators(
+                    () => currentDetailCompany,
+                    'A description.',
+                    ['Full-time'],
+                    '222',
+                ),
             },
             defaultLocator: createFakeLocator({
                 waitFor: () => {},
@@ -269,6 +349,7 @@ describe('scrapeAllJobsOnce()', () => {
     it('does not abort the run when one job fails partway through — later jobs still get scraped', async ({
         assert,
     }) => {
+        let currentDetailJobId = '111';
         const jobLocators = [
             createFakeJobLocator({
                 title: 'Frontend Developer',
@@ -279,6 +360,9 @@ describe('scrapeAllJobsOnce()', () => {
                 companyUrl: 'https://de.linkedin.com/company/acme',
                 location: 'Hamburg',
                 postedAt: '2026-07-21',
+                onClick: () => {
+                    currentDetailJobId = '111';
+                },
             }),
             createFakeJobLocator({
                 title: 'Backend Developer',
@@ -302,6 +386,9 @@ describe('scrapeAllJobsOnce()', () => {
                 companyUrl: 'https://de.linkedin.com/company/acme',
                 location: 'Hamburg',
                 postedAt: '2026-07-21',
+                onClick: () => {
+                    currentDetailJobId = '333';
+                },
             }),
         ];
         const page = createFakePage({
@@ -309,7 +396,12 @@ describe('scrapeAllJobsOnce()', () => {
                 [JOB_LIST_SELECTOR]: createFakeLocator({
                     nth: (index) => jobLocators[index]!,
                 }),
-                ...baseScrapeJobLocators(() => 'Acme'),
+                ...baseScrapeJobLocators(
+                    () => 'Acme',
+                    'A description.',
+                    ['Full-time'],
+                    () => currentDetailJobId,
+                ),
             },
             defaultLocator: createFakeLocator({
                 waitFor: () => {},
@@ -352,6 +444,7 @@ describe('scrapeAllJobsOnce()', () => {
         // while the middle job's 4000ms click cannot fit under any of it. The
         // gap is what keeps this from failing for reasons that have nothing to
         // do with the budget.
+        let currentDetailJobId = '111';
         const jobLocators = [
             createFakeJobLocator({
                 title: 'Frontend Developer',
@@ -362,6 +455,9 @@ describe('scrapeAllJobsOnce()', () => {
                 companyUrl: 'https://de.linkedin.com/company/acme',
                 location: 'Hamburg',
                 postedAt: '2026-07-21',
+                onClick: () => {
+                    currentDetailJobId = '111';
+                },
             }),
             createFakeJobLocator({
                 title: 'Backend Developer',
@@ -373,7 +469,12 @@ describe('scrapeAllJobsOnce()', () => {
                 location: 'Hamburg',
                 postedAt: '2026-07-21',
                 onClick: () =>
-                    new Promise<void>((resolve) => setTimeout(resolve, 4000)),
+                    new Promise<void>((resolve) =>
+                        setTimeout(() => {
+                            currentDetailJobId = '222';
+                            resolve();
+                        }, 4000),
+                    ),
             }),
             createFakeJobLocator({
                 title: 'Fullstack Developer',
@@ -384,6 +485,9 @@ describe('scrapeAllJobsOnce()', () => {
                 companyUrl: 'https://de.linkedin.com/company/acme',
                 location: 'Hamburg',
                 postedAt: '2026-07-21',
+                onClick: () => {
+                    currentDetailJobId = '333';
+                },
             }),
         ];
         const page = createFakePage({
@@ -391,7 +495,12 @@ describe('scrapeAllJobsOnce()', () => {
                 [JOB_LIST_SELECTOR]: createFakeLocator({
                     nth: (index) => jobLocators[index]!,
                 }),
-                ...baseScrapeJobLocators(() => 'Acme'),
+                ...baseScrapeJobLocators(
+                    () => 'Acme',
+                    'A description.',
+                    ['Full-time'],
+                    () => currentDetailJobId,
+                ),
             },
             defaultLocator: createFakeLocator({
                 waitFor: () => {},
@@ -503,6 +612,7 @@ describe('scrapeAllJobsOnce()', () => {
         // "this combination never occurs" and "this condition co-occurs with
         // staleness" are both unanswerable (GitHub issue #29).
         let currentDetailCompany = 'Acme';
+        let currentDetailJobId = '111';
         const jobLocators = [
             createFakeJobLocator({
                 title: 'Frontend Developer',
@@ -515,6 +625,7 @@ describe('scrapeAllJobsOnce()', () => {
                 postedAt: '2026-07-21',
                 onClick: () => {
                     currentDetailCompany = 'Acme';
+                    currentDetailJobId = '111';
                 },
             }),
             createFakeJobLocator({
@@ -528,6 +639,7 @@ describe('scrapeAllJobsOnce()', () => {
                 postedAt: '2026-07-21',
                 onClick: () => {
                     currentDetailCompany = 'Globex Corporation';
+                    currentDetailJobId = '222';
                 },
             }),
         ];
@@ -536,7 +648,12 @@ describe('scrapeAllJobsOnce()', () => {
                 [JOB_LIST_SELECTOR]: createFakeLocator({
                     nth: (index) => jobLocators[index]!,
                 }),
-                ...baseScrapeJobLocators(() => currentDetailCompany),
+                ...baseScrapeJobLocators(
+                    () => currentDetailCompany,
+                    'A description.',
+                    ['Full-time'],
+                    () => currentDetailJobId,
+                ),
             },
             defaultLocator: createFakeLocator({
                 waitFor: () => {},

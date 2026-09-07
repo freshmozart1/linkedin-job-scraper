@@ -10,12 +10,18 @@ export async function scrapeSingleJob(
     jobItem: Locator,
     pageUrl?: string,
     companyLookup?: CompanyLookup,
+    detailJobId = '111',
 ): Promise<JobResult> {
     const page = createFakePage({
         url: pageUrl ? () => pageUrl : undefined,
         locatorsBySelector: {
             [JOB_LIST_SELECTOR]: createFakeLocator({ nth: () => jobItem }),
-            ...baseScrapeJobLocators(() => 'Acme'),
+            ...baseScrapeJobLocators(
+                () => 'Acme',
+                'A description.',
+                ['Full-time'],
+                detailJobId,
+            ),
         },
         defaultLocator: createFakeLocator({
             waitFor: () => {},

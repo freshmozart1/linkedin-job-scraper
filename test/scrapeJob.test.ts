@@ -299,7 +299,7 @@ describe('scrapeJob()', () => {
             true,
         );
     });
-    it('flags a same-company stale detail pane via sourceJobIdMismatch even though companyMismatch misses it', async ({
+    it('fails a same-company stale pane before reading detail fields when identity stays mismatched', async ({
         assert,
     }) => {
         // Reproduces GitHub issue #17: the detail pane is left over from an
@@ -307,6 +307,8 @@ describe('scrapeJob()', () => {
         // companyMismatch can't see it — but the detail pane's own title
         // link still carries the earlier job's ID ('111'), not this job's
         // ('222'), which is what sourceJobIdMismatch is for.
+        let clicks = 0;
+        let detailCompanyReads = 0;
         const jobItem = createFakeJobLocator({
             title: 'Frontend Developer',
             listCompany: 'Acme',
@@ -316,12 +318,18 @@ describe('scrapeJob()', () => {
             location: 'Berlin, Berlin, Germany',
             postedAt: '2026-07-21',
             companyUrl: 'https://de.linkedin.com/company/acme',
+            onClick: () => {
+                clicks += 1;
+            },
         });
         const page = createFakePage({
             locatorsBySelector: {
                 [JOB_LIST_SELECTOR]: createFakeLocator({ nth: () => jobItem }),
                 ...baseScrapeJobLocators(
-                    () => 'Acme',
+                    () => {
+                        detailCompanyReads += 1;
+                        return 'Acme';
+                    },
                     'A description.',
                     ['Full-time'],
                     '111',
@@ -339,9 +347,249 @@ describe('scrapeJob()', () => {
             companyLookup: stubCompanyLookup(),
         });
 
-        assert.equal(result.status, 'success');
+        assertFailed(result);
+        assert.equal(result.failureReason, 'detail-pane-identity-unverified');
+        assert.match(result.error, /source job ID 222/);
+        assert.match(result.error, /last observed detail job ID: 111/);
+        assert.equal(result.company, null);
+        assert.equal(result.descriptionText, null);
         assert.equal(result.companyMismatch, false);
-        assert.equal(result.sourceJobIdMismatch, true);
+        assert.equal(result.sourceJobIdMismatch, false);
+        assert.equal(clicks, 2);
+        assert.equal(detailCompanyReads, 0);
+    });
+    it('accepts delayed pane advancement during the initial identity wait without re-clicking', async ({
+        assert,
+    }) => {
+        let clicks = 0;
+        let detailJobId = '111';
+        const records: StaleDiagnostics[] = [];
+        const jobItem = createFakeJobLocator({
+            title: 'Backend Developer',
+            listCompany: 'Acme',
+            sourceJobId: '222',
+            sourceUrl:
+                'https://de.linkedin.com/jobs/view/backend-developer-at-acme-222',
+            companyUrl: 'https://de.linkedin.com/company/acme',
+            location: 'Berlin',
+            postedAt: '2026-07-21',
+            onClick: () => {
+                clicks += 1;
+            },
+        });
+        const page = createFakePage({
+            locatorsBySelector: {
+                [JOB_LIST_SELECTOR]: createFakeLocator({ nth: () => jobItem }),
+                ...baseScrapeJobLocators(
+                    () => 'Acme',
+                    'The current description.',
+                    ['Full-time'],
+                    () => detailJobId,
+                ),
+                [`${DETAIL_TITLE_LINK_SELECTOR}[href*="-222"]`]:
+                    createFakeLocator({
+                        waitFor: () => {
+                            detailJobId = '222';
+                        },
+                    }),
+            },
+            defaultLocator: createFakeLocator({
+                waitFor: () => {},
+                isVisible: () => false,
+            }),
+        });
+
+        const result = await scrapeJob(page, 0, {
+            seenSourceJobIds: new Map(),
+            runTimestamp: 123,
+            companyLookup: stubCompanyLookup(),
+            onJobDiagnostics: (record) => records.push(record),
+        });
+
+        assert.equal(result.status, 'success');
+        assert.equal(clicks, 1);
+        assert.deepEqual(
+            records[0]?.detailIdentityChecks?.map((check) => [
+                check.attempt,
+                check.detailJobId,
+                check.matched,
+            ]),
+            [['initial', '222', true]],
+        );
+    });
+    it('re-clicks once and reads detail fields only after the pane identity matches', async ({
+        assert,
+    }) => {
+        let clicks = 0;
+        let detailJobId = '111';
+        let detailReads = 0;
+        const records: StaleDiagnostics[] = [];
+        const jobItem = createFakeJobLocator({
+            title: 'Backend Developer',
+            listCompany: 'Acme',
+            sourceJobId: '222',
+            sourceUrl:
+                'https://de.linkedin.com/jobs/view/backend-developer-at-acme-222',
+            companyUrl: 'https://de.linkedin.com/company/acme',
+            location: 'Berlin',
+            postedAt: '2026-07-21',
+            onClick: () => {
+                clicks += 1;
+                if (clicks === 2) detailJobId = '222';
+            },
+        });
+        const page = createFakePage({
+            locatorsBySelector: {
+                [JOB_LIST_SELECTOR]: createFakeLocator({ nth: () => jobItem }),
+                ...baseScrapeJobLocators(
+                    () => {
+                        detailReads += 1;
+                        return 'Acme';
+                    },
+                    'The recovered description.',
+                    ['Full-time'],
+                    () => detailJobId,
+                ),
+            },
+            defaultLocator: createFakeLocator({
+                waitFor: () => {},
+                isVisible: () => false,
+            }),
+        });
+
+        const result = await scrapeJob(page, 0, {
+            seenSourceJobIds: new Map(),
+            runTimestamp: 123,
+            companyLookup: stubCompanyLookup(),
+            onJobDiagnostics: (record) => records.push(record),
+        });
+
+        assert.equal(result.status, 'success');
+        assert.equal(result.descriptionText, 'The recovered description.');
+        assert.equal(clicks, 2);
+        assert.equal(detailReads, 1);
+        assert.equal(records[0]?.clickAttempts, 2);
+        assert.deepEqual(
+            records[0]?.detailIdentityChecks?.map((check) => [
+                check.attempt,
+                check.detailJobId,
+                check.matched,
+            ]),
+            [
+                ['initial', '111', false],
+                ['immediate-reclick', '222', true],
+            ],
+        );
+    });
+    it('honours an abort raised during the immediate identity recovery', async ({
+        assert,
+    }) => {
+        const controller = new AbortController();
+        let clicks = 0;
+        const jobItem = createFakeJobLocator({
+            title: 'Backend Developer',
+            listCompany: 'Acme',
+            sourceJobId: '222',
+            sourceUrl:
+                'https://de.linkedin.com/jobs/view/backend-developer-at-acme-222',
+            companyUrl: 'https://de.linkedin.com/company/acme',
+            location: 'Berlin',
+            postedAt: '2026-07-21',
+            onClick: () => {
+                clicks += 1;
+                if (clicks === 2) controller.abort();
+            },
+        });
+        const page = createFakePage({
+            locatorsBySelector: {
+                [JOB_LIST_SELECTOR]: createFakeLocator({ nth: () => jobItem }),
+                ...baseScrapeJobLocators(
+                    () => 'Acme',
+                    'Must never be read.',
+                    ['Full-time'],
+                    '111',
+                ),
+            },
+            defaultLocator: createFakeLocator({
+                waitFor: () => {},
+                isVisible: () => false,
+            }),
+        });
+
+        const result = await scrapeJob(page, 0, {
+            seenSourceJobIds: new Map(),
+            runTimestamp: 123,
+            companyLookup: stubCompanyLookup(),
+            signal: controller.signal,
+        });
+
+        assertFailed(result);
+        assert.equal(result.error, 'Scrape aborted');
+        assert.equal(result.failureReason, undefined);
+        assert.equal(result.company, null);
+        assert.equal(result.descriptionText, null);
+        assert.equal(clicks, 2);
+    });
+    it('compares complete parsed IDs instead of accepting a longer ID that contains the expected one', async ({
+        assert,
+    }) => {
+        const jobItem = createFakeJobLocator({
+            title: 'Frontend Developer',
+            listCompany: 'Acme',
+            sourceJobId: '111',
+            sourceUrl: 'https://de.linkedin.com/jobs/view/frontend-at-acme-111',
+            companyUrl: 'https://de.linkedin.com/company/acme',
+            location: 'Berlin',
+            postedAt: '2026-07-21',
+        });
+        const page = createFakePage({
+            locatorsBySelector: {
+                [JOB_LIST_SELECTOR]: createFakeLocator({ nth: () => jobItem }),
+                ...baseScrapeJobLocators(
+                    () => 'Acme',
+                    'A description.',
+                    ['Full-time'],
+                    '1119',
+                ),
+            },
+            defaultLocator: createFakeLocator({
+                waitFor: () => {},
+                isVisible: () => false,
+            }),
+        });
+
+        const result = await scrapeJob(page, 0, {
+            seenSourceJobIds: new Map(),
+            runTimestamp: 123,
+            companyLookup: stubCompanyLookup(),
+        });
+
+        assertFailed(result);
+        assert.equal(result.failureReason, 'detail-pane-identity-unverified');
+        assert.match(result.error, /last observed detail job ID: 1119/);
+    });
+    it('fails safely before clicking when no source job ID can be parsed from the card', async ({
+        assert,
+    }) => {
+        let clicks = 0;
+        const jobItem = createFakeJobLocator({
+            title: 'Frontend Developer',
+            listCompany: 'Acme',
+            sourceJobId: null,
+            sourceUrl: 'https://de.linkedin.com/jobs/view/frontend-at-acme',
+            onClick: () => {
+                clicks += 1;
+            },
+        });
+
+        const result = await scrapeSingleJob(jobItem);
+
+        assertFailed(result);
+        assert.equal(
+            result.error,
+            'No source job ID found for job item - LinkedIn markup has likely changed',
+        );
+        assert.equal(clicks, 0);
     });
     it('returns a failed result when the list item has no job title', async ({
         assert,
@@ -647,7 +895,12 @@ describe('scrapeJob()', () => {
                 'https://de.linkedin.com/jobs/view/frontend-developer-at-acme-4012345678?refId=abc',
         });
 
-        const result = await scrapeSingleJob(jobItem);
+        const result = await scrapeSingleJob(
+            jobItem,
+            undefined,
+            undefined,
+            '4012345678',
+        );
 
         // A failed urn read must not take the whole identity down with it: the
         // posting ID is recoverable from the href, and duplicate detection plus
@@ -1338,6 +1591,15 @@ describe('scrapeJob()', () => {
                         nth: () => jobItem,
                     }),
                     ...baseScrapeJobLocators(() => 'Acme'),
+                    [DETAIL_TITLE_LINK_SELECTOR]: createFakeLocator({
+                        getAttribute: (_name, options) => {
+                            timeouts.push({
+                                where: 'detailIdentityHref',
+                                ...options,
+                            });
+                            return 'https://de.linkedin.com/jobs/view/frontend-developer-at-acme-111';
+                        },
+                    }),
                 },
                 // The detail pane's own title-link wait resolves through here.
                 defaultLocator: createFakeLocator({
@@ -1361,7 +1623,15 @@ describe('scrapeJob()', () => {
             t.assert.equal(result.status, 'success');
             t.assert.deepEqual(
                 timeouts.map((recorded) => recorded.where).sort(),
-                ['click', 'detailWaitFor', 'networkidle', 'scroll'],
+                [
+                    'click',
+                    'detailIdentityHref',
+                    'detailIdentityHref',
+                    'detailIdentityHref',
+                    'detailWaitFor',
+                    'networkidle',
+                    'scroll',
+                ],
                 'expected every bounded wait in the per-job path to be recorded',
             );
             for (const { where, timeout } of timeouts) {
@@ -1755,7 +2025,12 @@ describe('scrapeJob()', () => {
                     [JOB_LIST_SELECTOR]: createFakeLocator({
                         nth: () => jobItem,
                     }),
-                    ...baseScrapeJobLocators(() => 'Globex Corporation'),
+                    ...baseScrapeJobLocators(
+                        () => 'Globex Corporation',
+                        'A description.',
+                        ['Full-time'],
+                        '222',
+                    ),
                 },
                 defaultLocator: createFakeLocator({
                     waitFor: () => {},
@@ -1906,7 +2181,12 @@ describe('scrapeJob()', () => {
                                 );
                             },
                         }),
-                    ...baseScrapeJobLocators(() => 'Globex Corporation'),
+                    ...baseScrapeJobLocators(
+                        () => 'Globex Corporation',
+                        'A description.',
+                        ['Full-time'],
+                        '222',
+                    ),
                 },
                 defaultLocator: createFakeLocator({
                     waitFor: () => {},
@@ -1954,7 +2234,12 @@ describe('scrapeJob()', () => {
                     [JOB_LIST_SELECTOR]: createFakeLocator({
                         nth: () => jobItem,
                     }),
-                    ...baseScrapeJobLocators(() => 'Globex Corporation'),
+                    ...baseScrapeJobLocators(
+                        () => 'Globex Corporation',
+                        'A description.',
+                        ['Full-time'],
+                        '222',
+                    ),
                 },
                 defaultLocator: createFakeLocator({
                     waitFor: () => {},
@@ -1989,7 +2274,12 @@ describe('scrapeJob()', () => {
                 },
                 locatorsBySelector: {
                     [JOB_LIST_SELECTOR]: createFakeLocator({ nth: () => jobItem }),
-                    ...baseScrapeJobLocators(() => 'Globex Corporation'),
+                    ...baseScrapeJobLocators(
+                        () => 'Globex Corporation',
+                        'A description.',
+                        ['Full-time'],
+                        '222',
+                    ),
                 },
                 defaultLocator: createFakeLocator({
                     waitFor: () => {},
@@ -2032,7 +2322,12 @@ describe('scrapeJob()', () => {
                     [JOB_LIST_SELECTOR]: createFakeLocator({
                         nth: () => jobItem,
                     }),
-                    ...baseScrapeJobLocators(() => 'Globex Corporation'),
+                    ...baseScrapeJobLocators(
+                        () => 'Globex Corporation',
+                        'A description.',
+                        ['Full-time'],
+                        '222',
+                    ),
                 },
                 defaultLocator: createFakeLocator({
                     waitFor: () => {},

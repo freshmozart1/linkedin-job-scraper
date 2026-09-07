@@ -1,7 +1,7 @@
 import type { JobResult } from '../types';
 import type { ScrapeContext } from './scrapeContext';
 import { scrapeJobAndRecord } from './scrapeJobAndRecord';
-import { isStaleResult } from './isStaleResult';
+import { isRetryableResult } from './isRetryableResult';
 import { sleep } from './sleep';
 
 // CRAP score here is driven by fallow's *estimated* (not instrumented)
@@ -15,12 +15,16 @@ export async function scrapeAllJobsOnce(
     results: JobResult[],
 ): Promise<number[]> {
     const delayBetweenJobsMs = ctx.delayBetweenJobsMs ?? 700;
-    const staleIndices: number[] = [];
+    // Returned to the run's one deferred pass. This includes successful stale
+    // results and explicit detail-identity failures: the latter must never be
+    // trusted, but the settled page still deserves the same proven recovery
+    // opportunity stale successes had before GitHub issue #35.
+    const retryIndices: number[] = [];
     for (let i = 0; i < ctx.totalJobs; i++) {
         if (ctx.signal?.aborted) break;
         const result = await scrapeJobAndRecord(ctx, results, i);
-        if (isStaleResult(result)) staleIndices.push(i);
+        if (isRetryableResult(result)) retryIndices.push(i);
         await sleep(delayBetweenJobsMs);
     }
-    return staleIndices;
+    return retryIndices;
 }

@@ -1,4 +1,5 @@
 import type {
+    DetailPaneIdentityObservation,
     OverlayCheck,
     StaleDiagnostics,
     StaleDiagnosticsOptions,
@@ -12,8 +13,8 @@ const DEFAULT_MAX_SNAPSHOT_CHARS = 4000;
  * `StaleDiagnosticsOptions` with every snapshot switch resolved, so the one
  * place that reads them (`readJobDetailPane`) never re-applies a default of
  * its own. `enabled` is deliberately absent: it is decided one level up, by
- * whether a recorder exists at all, which is what keeps every instrumented
- * helper's uninstrumented path byte-identical.
+ * whether a recorder exists at all. That keeps collection out of the normal
+ * path without changing the identity gate or recovery behavior.
  */
 export interface StaleDiagnosticsSettings {
     domSnapshot: boolean;
@@ -37,6 +38,10 @@ export interface StaleDiagnosticsRecorder {
     record(partial: Partial<StaleDiagnostics>): void;
     /** Appends one overlay observation without exposing the mutable record. */
     recordOverlayCheck(check: OverlayCheck): void;
+    /** Adds low-level click attempts across the initial activation and recovery re-click. */
+    addClickAttempts(attempts: number): void;
+    /** Appends one exact detail-pane identity observation. */
+    recordDetailIdentityCheck(check: DetailPaneIdentityObservation): void;
     /**
      * Milliseconds since the click *completed* — the zero point every
      * `msTo…Read` offset is measured from — or `-1` while no completed click
@@ -51,9 +56,9 @@ export interface StaleDiagnosticsRecorder {
 // Builds one job's diagnostics recorder (GitHub issue #29).
 //
 // Created in scrapeJob right where createJobBudget is, and threaded down the
-// same way — as an optional trailing parameter on each helper, so a caller
-// that passes none (clickLoadPhase, or anyone driving the exported scrapeJob
-// directly) runs exactly the code it ran before.
+// same way — as an optional trailing parameter on each helper. A caller that
+// passes none (clickLoadPhase, or anyone driving the exported scrapeJob
+// directly) skips collection while retaining the same scrape decisions.
 //
 // This is deliberately a plain accumulator with no opinion about what a
 // "stale" job is: deciding that is isStaleResult's job, and re-deriving it
@@ -92,6 +97,7 @@ export function createStaleDiagnostics(options: {
         clickStartedAt: -1,
         clickDurationMs: -1,
         titleLinkWait: null,
+        detailIdentityChecks: [],
         networkIdleWait: null,
         msToCompanyRead: -1,
         msToDescriptionRead: -1,
@@ -116,6 +122,12 @@ export function createStaleDiagnostics(options: {
         },
         recordOverlayCheck(check: OverlayCheck): void {
             record.overlayChecks.push(check);
+        },
+        addClickAttempts(attempts: number): void {
+            record.clickAttempts += attempts;
+        },
+        recordDetailIdentityCheck(check: DetailPaneIdentityObservation): void {
+            record.detailIdentityChecks?.push(check);
         },
         sinceClick(): number {
             // Both halves are needed: the offsets are measured from the click

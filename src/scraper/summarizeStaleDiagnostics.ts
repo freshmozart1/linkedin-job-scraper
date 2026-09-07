@@ -84,6 +84,7 @@ export function summarizeStaleDiagnostics(
     for (const p of successful) byCombination[p.record.combination] += 1;
 
     const clusters = clustersOf(stale);
+    const identityRecovery = summarizeIdentityRecovery(records);
     return {
         totalRecords: records.length,
         successfulJobs: successful.length,
@@ -104,6 +105,7 @@ export function summarizeStaleDiagnostics(
         retriesAttempted: records.filter((record) => record.pass === 'retry')
             .length,
         retriesRecovered: countRecoveredRetries(positioned),
+        identityRecovery,
         conditions: CONDITIONS.map(({ condition, holds }) =>
             coOccurrence(condition, successful, holds),
         ),
@@ -189,10 +191,13 @@ function clustersOf(
 }
 
 function countRecoveredRetries(positioned: PositionedRecord[]): number {
-    const staleFirstPass = new Set(
+    const retryableFirstPass = new Set(
         positioned
             .filter(
-                (p) => p.record.pass === 'first' && isStaleRecord(p.record),
+                (p) =>
+                    p.record.pass === 'first' &&
+                    (isStaleRecord(p.record) ||
+                        isDetailIdentityFailure(p.record)),
             )
             .map((p) => `${p.record.runId}:${p.record.index}`),
     );
@@ -201,8 +206,39 @@ function countRecoveredRetries(positioned: PositionedRecord[]): number {
             p.record.pass === 'retry' &&
             p.record.resultStatus === 'success' &&
             p.record.combination === 'none' &&
-            staleFirstPass.has(`${p.record.runId}:${p.record.index}`),
+            retryableFirstPass.has(`${p.record.runId}:${p.record.index}`),
     ).length;
+}
+
+function isDetailIdentityFailure(record: StaleDiagnostics): boolean {
+    const checks = record.detailIdentityChecks ?? [];
+    return (
+        record.resultStatus === 'failed' &&
+        checks.length > 1 &&
+        checks.at(-1)?.matched === false
+    );
+}
+
+function summarizeIdentityRecovery(records: StaleDiagnostics[]): {
+    attempted: number;
+    recovered: number;
+    failed: number;
+} {
+    const attempted = records.filter((record) =>
+        (record.detailIdentityChecks ?? []).some(
+            (check) => check.attempt === 'immediate-reclick',
+        ),
+    );
+    const recovered = attempted.filter(
+        (record) =>
+            record.resultStatus === 'success' &&
+            record.detailIdentityChecks?.at(-1)?.matched === true,
+    ).length;
+    return {
+        attempted: attempted.length,
+        recovered,
+        failed: attempted.length - recovered,
+    };
 }
 
 function coOccurrence(

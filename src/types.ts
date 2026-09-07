@@ -1,5 +1,8 @@
 export type JobStatus = 'success' | 'failed' | 'skipped';
 
+/** Machine-readable classification for failures callers may want to handle specially. */
+export type FailedJobReason = 'detail-pane-identity-unverified';
+
 /**
  * One office address published in the "Locations" section of a company's
  * LinkedIn page, split the way LinkedIn itself renders it.
@@ -198,6 +201,11 @@ export interface FailedJobResult extends JobResultBase {
     status: 'failed';
     /** The thrown error's message. */
     error: string;
+    /**
+     * Present for a failure with a stable, machine-readable recovery policy.
+     * Omitted for ordinary Playwright, markup, budget, and abort failures.
+     */
+    failureReason?: FailedJobReason;
     title: string | null;
     company: null;
     descriptionText: null;
@@ -681,15 +689,13 @@ export type StaleFlagCombination =
     | 'company+sourceJobId+lateOverlay';
 
 /**
- * What one Playwright wait in the per-job path actually did — recorded, not
- * acted upon.
+ * What one Playwright wait in the per-job path actually did.
  *
- * `waitForJobDetailToLoad` swallows both of its timeouts (`.catch(() => {})`)
- * and hands whatever pane is there to the reads below it, which is the
- * mechanism GitHub issue #29 suspects behind a third of a run coming back
- * suspect. Nothing downstream could previously tell a wait that *resolved*
- * from one that silently gave up, which makes this the single most important
- * measurement the diagnostics collect.
+ * The detail title-link visibility wait and the subsequent network-idle wait
+ * remain best-effort signals, so their rejections are recorded rather than
+ * propagated. The exact parsed-ID comparison is the gate that now decides
+ * whether detail fields may be read; these observations explain what the
+ * waits did without being used as proof of identity themselves.
  */
 export interface WaitObservation {
     /**
@@ -697,8 +703,10 @@ export interface WaitObservation {
      * rejected and the rejection was swallowed (a `waitFor`/`waitForLoadState`
      * has no realistic rejection other than its own timeout, so every
      * swallowed one is recorded as this). `'skipped'` — the wait was never
-     * issued at all, which for the detail-pane title link means the clicked
-     * card had no `sourceJobId` to wait on.
+     * issued at all. The detail-pane gate no longer reaches that state in a
+     * normal scrape because list identity rejects a missing `sourceJobId`
+     * before the card is clicked; it remains in the type for compatibility
+     * with direct helper callers and older diagnostic records.
      */
     outcome: 'resolved' | 'timedOut' | 'skipped';
     /** Wall-clock milliseconds the wait actually took; `0` for a `'skipped'` one. */
@@ -712,6 +720,20 @@ export interface WaitObservation {
      * to Playwright at all.
      */
     timeoutMs: number;
+}
+
+/**
+ * One exact comparison between the clicked card and the detail pane after an
+ * activation. The title-link wait is only a trigger; `matched` is derived by
+ * parsing the href and comparing the complete posting IDs.
+ */
+export interface DetailPaneIdentityObservation {
+    attempt: 'initial' | 'immediate-reclick';
+    expectedJobId: string | null;
+    detailTitleHref: string | null;
+    detailJobId: string | null;
+    matched: boolean;
+    wait: WaitObservation;
 }
 
 /**
@@ -841,6 +863,12 @@ export interface StaleDiagnostics {
     clickDurationMs: number;
     /** The detail pane's title-link wait; `null` when `waitForJobDetailToLoad` was never reached. */
     titleLinkWait: WaitObservation | null;
+    /**
+     * Ordered exact identity checks for the initial activation and, when
+     * needed, the one immediate recovery re-click. Optional so stored records
+     * produced before v0.12 remain consumable.
+     */
+    detailIdentityChecks?: DetailPaneIdentityObservation[];
     /** The `networkidle` wait; `null` when `waitForJobDetailToLoad` was never reached. */
     networkIdleWait: WaitObservation | null;
     /** Milliseconds from the click completing to the detail company being read; `-1` when that read never happened. */
@@ -919,8 +947,10 @@ export interface StaleReport {
     longestCluster: number;
     /** Records with `pass: 'retry'`. */
     retriesAttempted: number;
-    /** Retry records that came back clean at an index whose first pass was stale — how often the existing single retry actually rescues a job. */
+    /** Retry records that came back clean at an index whose first pass was stale or failed the detail identity gate. */
     retriesRecovered: number;
+    /** Immediate identity recovery across every diagnostic record. */
+    identityRecovery: { attempted: number; recovered: number; failed: number };
     /** The co-occurrence table, one entry per observable condition, in a fixed order. */
     conditions: ConditionCoOccurrence[];
     /** Every record the report was built from, kept so a written-out report is self-contained. */
@@ -937,9 +967,8 @@ export interface StaleDiagnosticsOptions {
      * the snapshot is a value the scrape already computed — timestamps,
      * booleans, strings it read anyway — so collection costs no extra
      * browser round-trips. `false` skips the recorder entirely, leaving
-     * `ScrapeOutcome.staleReport` and both job events' `diagnostics` absent
-     * and every instrumented helper byte-identical to its uninstrumented
-     * self.
+     * `ScrapeOutcome.staleReport` and both job events' `diagnostics` absent.
+     * It does not disable identity verification or either recovery path.
      */
     enabled?: boolean;
     /**
