@@ -22,7 +22,15 @@ export async function retryStaleJobs(
     const delayBetweenJobsMs = ctx.delayBetweenJobsMs ?? 700;
     for (const i of staleIndices) {
         if (ctx.signal?.aborted) break;
-        await scrapeJobAndRecord(ctx, results, i, { preClickDelayMs: 1000 });
+        // `pass: 'retry'` marks this scrape's diagnostics record as the
+        // second look at an index, so the report can tell a retry that
+        // rescued a job from a first-pass result that was clean all along —
+        // and so its index is never mistaken for the next one along in the
+        // first pass's own sequence.
+        await scrapeJobAndRecord(ctx, results, i, {
+            preClickDelayMs: 1000,
+            pass: 'retry',
+        });
         await sleep(delayBetweenJobsMs);
     }
 }

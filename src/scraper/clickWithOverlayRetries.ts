@@ -4,6 +4,8 @@ import { clearBlockingOverlays } from './clearBlockingOverlays';
 import type { OverlayClearSettings } from './clearBlockingOverlays';
 import { boundedClearTimeout, boundedTimeout } from './jobBudget';
 import { sleep } from './sleep';
+import type { StaleDiagnosticsRecorder } from './createStaleDiagnostics';
+import { recordOverlayCheck } from './recordOverlayCheck';
 
 export interface ClickWithOverlayRetriesOptions {
     /** Click attempts before the last failure is rethrown; default 4. */
@@ -24,6 +26,16 @@ export interface ClickWithOverlayRetriesOptions {
      * left and the retry loop stops as soon as there is nothing left to spend.
      */
     budget?: JobBudget;
+    /**
+     * The job's stale-diagnostics recorder, when this click is part of one.
+     * Records how hard the click had to work — attempts made and overlay
+     * clears run — because "the click fought an overlay" is one of the
+     * conditions GitHub issue #29 needs correlated against staleness, and
+     * both numbers were previously thrown away here. Optional, so
+     * `clickLoadPhase` (which has no job to record against) passes none and
+     * runs exactly the code it ran before.
+     */
+    diagnostics?: StaleDiagnosticsRecorder;
 }
 
 // The sign-in wall can pop up *during* a click attempt (not just before it),
@@ -56,45 +68,72 @@ export async function clickWithOverlayRetries(
         maxAttempts = 4,
         overlayClear,
         budget,
+        diagnostics,
     }: ClickWithOverlayRetriesOptions = {},
 ): Promise<void> {
     const pollIntervalMs = 200;
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-        // `null` means the job has too little budget left for a clear to be
-        // worth running — see boundedClearTimeout, which exists so a
-        // near-spent budget can't drive clearBlockingOverlays straight to its
-        // DOM-mutating neutralize tier. The click below is attempted anyway;
-        // a page that really is blocked shows up as that click failing, which
-        // this already retries.
-        const clearTimeoutMs = boundedClearTimeout(
-            budget,
-            4000,
-            pollIntervalMs,
-        );
-        if (clearTimeoutMs !== null)
-            await clearBlockingOverlays(page, {
-                timeoutMs: clearTimeoutMs,
-                requiredConsecutiveClear: 2,
+    let attempts = 0;
+    // The counters are reported from a `finally` rather than before each
+    // `return`/`throw`: a click that never succeeded is the more interesting
+    // one to have counted, and every exit from the loop below — the success
+    // return, the budget throw, the final rethrow — has to record it.
+    try {
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            attempts = attempt;
+            // `null` means the job has too little budget left for a clear to be
+            // worth running — see boundedClearTimeout, which exists so a
+            // near-spent budget can't drive clearBlockingOverlays straight to its
+            // DOM-mutating neutralize tier. The click below is attempted anyway;
+            // a page that really is blocked shows up as that click failing, which
+            // this already retries.
+            const clearTimeoutMs = boundedClearTimeout(
+                budget,
+                4000,
                 pollIntervalMs,
-                ...overlayClear,
-            });
-        try {
-            await locator.click({ timeout: boundedTimeout(budget, 4000) });
-            return;
-        } catch (error) {
-            // A spent budget (or an abort, which reads as no time left) stops
-            // the ladder here rather than burning the remaining attempts on
-            // 1ms clicks that cannot succeed — and reports it as the budget
-            // failure it is. Rethrowing Playwright's own error instead would
-            // record this job as `locator.click: Timeout 1ms exceeded`,
-            // indistinguishable from a genuine click failure and not the
-            // `Job exceeded per-job time budget of <n>ms` that
-            // ScraperOptions.perJobTimeoutMs promises. `check()` always
-            // throws once `remaining()` is 0, so the rethrow below stays
-            // reachable only for a real failure.
-            if (budget?.remaining() === 0) budget.check();
-            if (attempt === maxAttempts) throw error;
-            await sleep(boundedTimeout(budget, 500));
+            );
+            const clearStartedAt = Date.now();
+            if (clearTimeoutMs !== null) {
+                const clearResult = await clearBlockingOverlays(page, {
+                    timeoutMs: clearTimeoutMs,
+                    requiredConsecutiveClear: 2,
+                    pollIntervalMs,
+                    ...overlayClear,
+                });
+                recordOverlayCheck(diagnostics, {
+                    phase: 'pre-click',
+                    attempt,
+                    startedAt: clearStartedAt,
+                    result: clearResult,
+                });
+            } else {
+                recordOverlayCheck(diagnostics, {
+                    phase: 'pre-click',
+                    attempt,
+                    startedAt: clearStartedAt,
+                });
+            }
+            try {
+                await locator.click({ timeout: boundedTimeout(budget, 4000) });
+                return;
+            } catch (error) {
+                // A spent budget (or an abort, which reads as no time left) stops
+                // the ladder here rather than burning the remaining attempts on
+                // 1ms clicks that cannot succeed — and reports it as the budget
+                // failure it is. Rethrowing Playwright's own error instead would
+                // record this job as `locator.click: Timeout 1ms exceeded`,
+                // indistinguishable from a genuine click failure and not the
+                // `Job exceeded per-job time budget of <n>ms` that
+                // ScraperOptions.perJobTimeoutMs promises. `check()` always
+                // throws once `remaining()` is 0, so the rethrow below stays
+                // reachable only for a real failure.
+                if (budget?.remaining() === 0) budget.check();
+                if (attempt === maxAttempts) throw error;
+                await sleep(boundedTimeout(budget, 500));
+            }
         }
+    } finally {
+        diagnostics?.record({
+            clickAttempts: attempts,
+        });
     }
 }

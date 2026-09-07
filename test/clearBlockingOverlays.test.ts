@@ -57,10 +57,12 @@ describe('clearBlockingOverlays()', () => {
             requiredConsecutiveClear: 2,
         });
         assert.deepEqual(result, {
+            observed: false,
             dismissed: false,
             neutralized: false,
             stillBlocking: false,
             diagnostics: null,
+            diagnosticsReadFailed: false,
         });
     });
 
@@ -103,10 +105,16 @@ describe('clearBlockingOverlays()', () => {
             requiredConsecutiveClear: 2,
         });
         assert.deepEqual(result, {
+            observed: true,
             dismissed: true,
             neutralized: false,
             stillBlocking: false,
-            diagnostics: null,
+            diagnostics: {
+                text: 'We and our partners use cookies',
+                classes: ['modal__overlay', 'modal__overlay--visible'],
+                buttonNames: ['Accept all', 'Reject all'],
+            },
+            diagnosticsReadFailed: false,
         });
         // The button is addressed by the index the diagnostics read reported
         // it at, not by a name-matched locator — that alignment is the whole
@@ -152,6 +160,7 @@ describe('clearBlockingOverlays()', () => {
             requiredConsecutiveClear: 2,
         });
         assert.equal(result.dismissed, false);
+        assert.equal(result.observed, true);
         assert.equal(result.neutralized, false);
         assert.equal(result.stillBlocking, true);
         assert.deepEqual(result.diagnostics, diagnostics);
@@ -269,6 +278,7 @@ describe('clearBlockingOverlays()', () => {
         });
         assert.equal(result.dismissed, false);
         assert.equal(result.neutralized, true);
+        assert.equal(result.observed, true);
         assert.equal(result.stillBlocking, false);
         assert.deepEqual(result.diagnostics, SIGN_IN_OVERLAY);
         assert.equal(neutralizeCalls, 1);
@@ -420,5 +430,30 @@ describe('clearBlockingOverlays()', () => {
         // The retained copy still rides out in the report, which is what it
         // is kept for.
         assert.deepEqual(result.diagnostics?.buttonNames, ['', 'Sign in']);
+    });
+
+    it('reports when reading an observed overlay throws', async ({ assert }) => {
+        const page = createFakePage({
+            locatorsBySelector: {
+                [OVERLAY_SELECTOR]: createFakeLocator({
+                    isVisible: () => true,
+                }),
+            },
+            evaluate: () => {
+                throw new Error('page was replaced during evaluate');
+            },
+        });
+
+        const result = await clearBlockingOverlays(page, {
+            timeoutMs: 50,
+            pollIntervalMs: 5,
+            maxDismissAttempts: 0,
+            neutralizeStuckOverlay: false,
+        });
+
+        assert.equal(result.observed, true);
+        assert.equal(result.stillBlocking, true);
+        assert.equal(result.diagnostics, null);
+        assert.equal(result.diagnosticsReadFailed, true);
     });
 });

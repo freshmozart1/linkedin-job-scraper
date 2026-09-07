@@ -58,6 +58,22 @@ export const JOB_CRITERIA_VALUE_SELECTOR =
  * rather than duplicating the `topcard-title` string.
  */
 export const DETAIL_TITLE_LINK_SELECTOR = 'a[href*="topcard-title"]';
+/**
+ * The container the guest job page renders the clicked posting into —
+ * **diagnostics only** (`readDetailPaneSnapshot`, GitHub issue #29). Nothing
+ * the scraper actually scrapes goes through it: every detail field is read
+ * document-wide, so a miss here cannot cost a job its data.
+ *
+ * A union of candidates rather than one string, matched first-in-DOM-order,
+ * because this is the one selector in this file with no live confirmation
+ * behind it — the pane's own wrapper class was never needed until a snapshot
+ * had to be scoped to it. `readDetailPaneSnapshot` falls back to
+ * `document.body` when none of these match and reports `classes: []` so the
+ * fallback is visible in the record rather than silently pretending the pane
+ * had no classes.
+ */
+export const DETAIL_PANE_SELECTOR =
+    'section.two-pane-serp-page__detail-view, div.details-pane__content, section.core-rail';
 
 // Company page ("Locations" section). COMPANY_LOCATION_ITEM_SELECTOR and
 // COMPANY_PRIMARY_TAG_SELECTOR are also hardcoded literally inside

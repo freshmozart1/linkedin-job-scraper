@@ -17,7 +17,10 @@ export interface FakePageConfig {
      * generic stub being misinterpreted by every call shape. Called once
      * per page.evaluate() invocation.
      */
-    evaluate?: (arg?: unknown) => unknown | Promise<unknown>;
+    evaluate?: (
+        arg?: unknown,
+        pageFunction?: unknown,
+    ) => unknown | Promise<unknown>;
     /**
      * Receives the `(state, options)` the scraper passes, so tests can assert
      * the networkidle wait is clamped to the job's remaining time budget.
@@ -58,8 +61,8 @@ export function createFakePage(config: FakePageConfig = {}): Page {
         url: () =>
             config.url?.() ??
             'https://www.linkedin.com/jobs/search?keywords=frontend',
-        evaluate: async (_pageFunction?: unknown, arg?: unknown) =>
-            config.evaluate ? config.evaluate(arg) : undefined,
+        evaluate: async (pageFunction?: unknown, arg?: unknown) =>
+            config.evaluate ? config.evaluate(arg, pageFunction) : undefined,
         waitForLoadState: async (
             state?: string,
             options?: { timeout?: number },

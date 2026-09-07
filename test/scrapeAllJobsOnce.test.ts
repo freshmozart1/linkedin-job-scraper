@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import { JOB_LIST_SELECTOR, scrapeAllJobsOnce } from '../src';
-import type { JobResult, ScrapeProgressEvent } from '../src';
+import type { JobResult, ScrapeProgressEvent, StaleDiagnostics } from '../src';
 import { createFakeLocator, createFakePage } from './helpers/fakePlaywright';
 import { createFakeJobLocator } from './helpers/fakePlaywright/createFakeJobLocator';
 import { baseScrapeJobLocators } from './helpers/baseScrapeJobLocators';
@@ -494,5 +494,135 @@ describe('scrapeAllJobsOnce()', () => {
 
         assert.equal(results.length, 1);
         assert.equal(results[0]?.index, 0);
+    });
+
+    it('attaches each job’s diagnostics to the job:done / job:stale event, healthy jobs included', async ({
+        assert,
+    }) => {
+        // The healthy jobs are the denominator: without a record for them,
+        // "this combination never occurs" and "this condition co-occurs with
+        // staleness" are both unanswerable (GitHub issue #29).
+        let currentDetailCompany = 'Acme';
+        const jobLocators = [
+            createFakeJobLocator({
+                title: 'Frontend Developer',
+                listCompany: 'Acme',
+                sourceJobId: '111',
+                sourceUrl:
+                    'https://www.linkedin.com/jobs/view/frontend-developer-at-acme-111',
+                companyUrl: 'https://de.linkedin.com/company/acme',
+                location: 'Hamburg',
+                postedAt: '2026-07-21',
+                onClick: () => {
+                    currentDetailCompany = 'Acme';
+                },
+            }),
+            createFakeJobLocator({
+                title: 'Backend Developer',
+                listCompany: 'Acme',
+                sourceJobId: '222',
+                sourceUrl:
+                    'https://www.linkedin.com/jobs/view/backend-developer-at-acme-222',
+                companyUrl: 'https://de.linkedin.com/company/acme',
+                location: 'Hamburg',
+                postedAt: '2026-07-21',
+                onClick: () => {
+                    currentDetailCompany = 'Globex Corporation';
+                },
+            }),
+        ];
+        const page = createFakePage({
+            locatorsBySelector: {
+                [JOB_LIST_SELECTOR]: createFakeLocator({
+                    nth: (index) => jobLocators[index]!,
+                }),
+                ...baseScrapeJobLocators(() => currentDetailCompany),
+            },
+            defaultLocator: createFakeLocator({
+                waitFor: () => {},
+                isVisible: () => false,
+            }),
+        });
+        const progressEvents: ScrapeProgressEvent[] = [];
+        const collected: StaleDiagnostics[] = [];
+
+        await scrapeAllJobsOnce(
+            {
+                page,
+                totalJobs: 2,
+                seenSourceJobIds: new Map(),
+                runTimestamp: 123,
+                delayBetweenJobsMs: 0,
+                companyLookup: stubCompanyLookup(),
+                onProgress: (e) => progressEvents.push(e),
+                onJobDiagnostics: (record) => collected.push(record),
+            },
+            [],
+        );
+
+        // Same records reach the run's accumulator and the progress stream.
+        assert.deepEqual(
+            collected.map((record) => [record.index, record.combination]),
+            [
+                [0, 'none'],
+                [1, 'company'],
+            ],
+        );
+        const done = progressEvents.find((e) => e.type === 'job:done');
+        const stale = progressEvents.find((e) => e.type === 'job:stale');
+        assert.equal(done?.diagnostics?.index, 0);
+        assert.equal(done?.diagnostics?.combination, 'none');
+        assert.equal(stale?.diagnostics?.index, 1);
+        assert.equal(stale?.diagnostics?.detailCompany, 'Globex Corporation');
+        assert.equal(stale?.diagnostics?.listCompany, 'Acme');
+    });
+
+    it('leaves the events’ diagnostics absent when the run collects none', async ({
+        assert,
+    }) => {
+        const jobLocators = [
+            createFakeJobLocator({
+                title: 'Frontend Developer',
+                listCompany: 'Acme',
+                sourceJobId: '111',
+                sourceUrl:
+                    'https://www.linkedin.com/jobs/view/frontend-developer-at-acme-111',
+                companyUrl: 'https://de.linkedin.com/company/acme',
+                location: 'Hamburg',
+                postedAt: '2026-07-21',
+            }),
+        ];
+        const page = createFakePage({
+            locatorsBySelector: {
+                [JOB_LIST_SELECTOR]: createFakeLocator({
+                    nth: (index) => jobLocators[index]!,
+                }),
+                ...baseScrapeJobLocators(() => 'Acme'),
+            },
+            defaultLocator: createFakeLocator({
+                waitFor: () => {},
+                isVisible: () => false,
+            }),
+        });
+        const progressEvents: ScrapeProgressEvent[] = [];
+
+        await scrapeAllJobsOnce(
+            {
+                page,
+                totalJobs: 1,
+                seenSourceJobIds: new Map(),
+                runTimestamp: 123,
+                delayBetweenJobsMs: 0,
+                companyLookup: stubCompanyLookup(),
+                onProgress: (e) => progressEvents.push(e),
+            },
+            [],
+        );
+
+        const done = progressEvents.find((e) => e.type === 'job:done');
+        assert.equal(done?.result.status, 'success');
+        // Absent, not an empty record: "diagnostics were off" has to stay
+        // distinguishable from "diagnostics were on and saw nothing".
+        assert.equal(done?.diagnostics, undefined);
     });
 });

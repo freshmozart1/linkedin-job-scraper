@@ -1,4 +1,5 @@
 import { chromium } from 'playwright';
+import { randomUUID } from 'node:crypto';
 import type { RunScraper, RunScrapeOptions } from '../types';
 import type { CompanyLookup } from '../companyLookup';
 import { buildSearchUrl } from '../url';
@@ -12,7 +13,8 @@ import { scrapeAllJobsOnce } from './scrapeAllJobsOnce';
 import { retryStaleJobs } from './retryStaleJobs';
 import { ScrapeAbortedError } from './ScrapeAbortedError';
 import { createRunTimeBudget } from './runTimeBudget';
-import type { JobResult, ScrapeOutcome } from '../types';
+import { summarizeStaleDiagnostics } from './summarizeStaleDiagnostics';
+import type { JobResult, ScrapeOutcome, StaleDiagnostics } from '../types';
 
 export const runScrape: RunScraper = async ({
     onProgress,
@@ -23,6 +25,7 @@ export const runScrape: RunScraper = async ({
     // Part of building each job's fallbackTitle (see scrapeJob) — just needs to
     // vary per run, nothing more.
     const runTimestamp = Date.now();
+    const runId = randomUUID();
     const searchUrl = buildSearchUrl(searchParams);
     const results: JobResult[] = [];
 
@@ -44,12 +47,32 @@ export const runScrape: RunScraper = async ({
         scraperOptions?.maxRunDurationMs,
         signal,
     );
+    // One accumulator for both scrape passes (GitHub issue #29). Diagnostics
+    // are on unless the caller says otherwise: every field but the DOM
+    // snapshot is a value the scrape already computed, so collecting them
+    // costs no extra browser round-trips. Turning them off leaves
+    // `onJobDiagnostics` absent, which is what stops a recorder from ever
+    // being created down in scrapeJob.
+    const diagnosticsEnabled =
+        scraperOptions?.staleDiagnostics?.enabled ?? true;
+    const staleRecords: StaleDiagnostics[] = [];
+    // Attached to every return path, the early ones included: a run that
+    // stopped short still observed everything it got through, and that
+    // partial evidence is exactly what a diagnostic run is after. `undefined`
+    // — not an empty report — when diagnostics are off, so "collected
+    // nothing" stays distinguishable from "collected nothing because nobody
+    // asked".
+    const staleReport = () =>
+        diagnosticsEnabled
+            ? summarizeStaleDiagnostics(staleRecords)
+            : undefined;
     // Spelled out once rather than at each of the three checkpoints below,
     // which were returning byte-identical objects and could quietly drift.
     const stoppedOnRunBudget = (): ScrapeOutcome => ({
         results,
         url: searchUrl,
         stoppedEarly: 'run-time-budget',
+        staleReport: staleReport(),
     });
 
     const browser = await chromium.launch({
@@ -108,6 +131,7 @@ export const runScrape: RunScraper = async ({
         onProgress?.({ type: 'jobs:found', total: totalJobs });
 
         const ctx: ScrapeContext = {
+            runId,
             page,
             totalJobs,
             seenSourceJobIds: new Map(),
@@ -127,6 +151,12 @@ export const runScrape: RunScraper = async ({
             // Carried per job so `neutralizeStuckOverlay` / `maxDismissAttempts`
             // reach the three in-job clear sites too, not just the clear above.
             overlayClear: toOverlayClearSettings(scraperOptions),
+            staleDiagnostics: scraperOptions?.staleDiagnostics,
+            onJobDiagnostics: diagnosticsEnabled
+                ? (record) => {
+                      staleRecords.push(record);
+                  }
+                : undefined,
         };
 
         const staleIndices = await scrapeAllJobsOnce(ctx, results);
@@ -144,7 +174,9 @@ export const runScrape: RunScraper = async ({
         if (runBudget.exceededReason()) return stoppedOnRunBudget();
 
         // No `stoppedEarly`: absent means the run scraped every job it found.
-        return { results, url: searchUrl };
+        // The report is built here, after both passes, so it covers the
+        // retries as well as the first sweep.
+        return { results, url: searchUrl, staleReport: staleReport() };
     } finally {
         // Debug-only escape hatch; only applies to headed runs (see ScraperOptions).
         const closeAfterScrape =

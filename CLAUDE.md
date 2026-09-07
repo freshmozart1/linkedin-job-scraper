@@ -14,7 +14,7 @@ This scrapes an unofficial, moving surface — LinkedIn's markup and anti-bot ga
 
 ```bash
 npm run build       # tsc -p tsconfig.json -> dist/ (JS + .d.ts + sourcemaps)
-npm test            # node --import tsx --test "test/*.test.ts"  (196 tests, no browser)
+npm test            # node --import tsx --test "test/*.test.ts"  (236 tests, no browser)
 npm run typecheck   # tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json
 
 # single test file / single test by name:
@@ -66,6 +66,20 @@ LinkedIn's detail pane sometimes doesn't re-render when cards are clicked quickl
 `companyMismatch` only compares company text, so on its own it has a blind spot: a pane left over from an *earlier posting at the same company* reads as a match and would never be flagged by it alone. `sourceJobIdMismatch` closes that gap (GitHub issue #17) — the detail pane's title link (`DETAIL_TITLE_LINK_SELECTOR`, matched by `waitForJobDetailToLoad`'s wait too) turned out to carry a real, verified-live per-posting job-ID marker: its `href` is the rendered posting's own canonical job URL, e.g. `.../jobs/view/frontend-entwickler-m-w-d-at-cpu-softwarehouse-ag-4442367237?trk=public_jobs_topcard-title`, confirmed to update correctly across two different postings from the same real company. `isSourceJobIdMismatch` (`src/scraper/isSourceJobIdMismatch.ts`) recovers that ID with the same `normalizeJobUrl` + `jobIdFromUrl` pipeline `readJobListIdentity` already uses for the list card's own href, and compares it against `sourceJobId`. It fails open (`false`) whenever the href can't be read or parsed, matching `isCompanyMismatch`'s own null-guard style, since `waitForJobDetailToLoad`'s wait for that same href is itself best-effort and silently gives up on timeout.
 
 Stale jobs get **exactly one** retry, deferred until the whole list has been scraped once (`retryStaleJobs`) — by then the page has settled, and the extra pre-click delay doesn't compound into every job. `scrapeJobAndRecord` writes `results[index] = result` (indexed write, not `push`) precisely so a retry replaces rather than appends.
+
+### The stale diagnostics record what happens; they never change it
+
+GitHub issue #29 reports ~a third of a live run coming back stale and being discarded downstream, dominated by `companyMismatch + sourceJobIdMismatch` with no overlay detected. That is a timing bug in a third party's client-side rendering, not reproducible from a unit test, so the issue's own first deliverable is explicitly **not** a fix: it is a helper that makes the failure conditions observable. Everything below is that helper, and it is observation only — `waitForJobDetailToLoad`'s `.catch(() => {})` stays, no re-click was added, and no staleness predicate's semantics changed.
+
+`createStaleDiagnostics` is a mutable per-job recorder created in `scrapeJob` right where `createJobBudget` is and threaded exactly the way `budget` is: an **optional trailing parameter** on `clickWithOverlayRetries` / `dismissOverlayAfterClick` / `waitForJobDetailToLoad` / `readJobDetailPane`, so omitting it leaves each of them byte-identical. It is assigned into rather than returned on success, mirroring `readJobListIdentity`'s `identity`: a job that throws partway still hands back what it saw. Skipped jobs finalize a minimal `resultStatus: 'skipped'` record so every list index remains present for positional analysis; status-aware denominators keep those rows from diluting stale rates.
+
+Three measurements carry the weight. `WaitObservation` reports whether each detail-pane wait resolved, timed out or was skipped, plus its budget-clamped timeout. `overlayChecks` retains every pre-click attempt, post-click clear and late clear with phase, elapsed time, observed/dismissed/neutralized/blocking state and diagnostics-read failures. Snapshot capture has its own explicit outcome and error, while `readDetailPaneSnapshot` keeps every matching title-link href and org name rather than only `.first()`.
+
+`summarizeStaleDiagnostics` and `describeStaleReport` are pure and exported. Records carry a generated `runId` and `totalJobs`, so concatenated runs never infer boundaries or halves from array order. Exact `index - 1` lookup within the same run/pass drives predecessor conditions, and clusters are grouped by run identity.
+
+Two things about the report's shape are load-bearing. `byCombination` carries all eight keys including zeros. Headline rates, combinations, positions and condition correlations use successful **first-pass** jobs only: retries remain raw evidence and recovery counters, while failed/skipped results can never count stale. Each condition reports the stale rate with it against the rate without it.
+
+`scripts/diagnose-stale.ts` drives it live (`npx tsx scripts/diagnose-stale.ts`), defaulting to the issue's exact repro. It is in `tsconfig.test.json`'s `include` so `npm run typecheck` covers it, and deliberately **not** in `tsconfig.json`, so it never lands in the published `dist/`.
 
 ### Identity reads are bounded, concurrent, and individually recoverable
 

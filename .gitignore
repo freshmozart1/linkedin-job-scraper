@@ -2,6 +2,8 @@ node_modules/
 dist/
 *.tsbuildinfo
 coverage/
+# Where scripts/diagnose-stale.ts writes each live run's records and report.
+diagnostics/
 .fallow
 .playwright-mcp
 .claude
