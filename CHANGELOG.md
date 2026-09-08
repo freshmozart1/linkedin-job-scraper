@@ -4,6 +4,10 @@ All notable changes to this project are documented in this file.
 
 ## v0.12.0
 
+### Fixed
+
+- Stale LinkedIn detail panes are no longer emitted as successful results. A successful read now requires the rendered detail job ID to match the clicked card's source job ID; an unverified pane becomes an explicit failure eligible for the existing deferred retry. This completes GitHub issue #29.
+
 ### Added
 
 - Exact detail-pane identity gating for GitHub issue #35. After each card activation, the title-link href is parsed and its complete job ID must equal the card's `sourceJobId` before company, description, tags, or other detail fields are read. A mismatch gets one immediate overlay-aware re-click within the existing job and run budgets.
@@ -14,6 +18,11 @@ All notable changes to this project are documented in this file.
 - Persistent identity failures return `status: 'failed'` with detail fields `null`; stale predecessor data is never returned as a successful result. These failures keep the existing deferred single-retry opportunity, which may replace the failed first-pass slot if the settled page recovers.
 - The existing 8s title-link and 5s network-idle caps, overlay policy, and deferred retry delay are unchanged. Network idle is only awaited after a candidate identity match, followed by one final exact identity check.
 - The package version is `0.12.0`.
+
+### Validation
+
+- GitHub issue #36's live experiment reproduced the 0/90 single-browser baseline and completed three isolated 30/30/30 three-browser contention samples. The fix emitted 0 stale successes among 243 successful first-pass reads; the other 27 of 270 first-pass paths were explicit identity failures, and all 27 recovered on the deferred retry for 270/270 final successes.
+- All 270 eligible contended detail reads captured their requested snapshots and complete overlay timelines, every successful rendered job ID matched its source job ID, and no run stopped early or produced a time-budget or unexplained failure.
 
 ## v0.11.0
 
