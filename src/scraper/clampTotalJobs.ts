@@ -1,6 +1,6 @@
-// Applied once, upstream in runScrape, to the raw count loadAllJobs
-// discovers — so it propagates for free through ScrapeContext.totalJobs
-// into both scrapeAllJobsOnce's loop bound and every progress event's
+// Applied once, upstream in runScrape, to the unique count loadAllJobs
+// discovers — so it propagates through ScrapeContext.totalJobs into the
+// mapped traversal bound and every progress event's
 // `total` (see README's Progress events section: jobs:found's `total` is
 // final for the run). Never expands past what was actually discovered.
 // Floored at 0 so a misconfigured (0 or negative) maxJobs can't leak a

@@ -1,7 +1,10 @@
 import type { JobResult, StaleDiagnostics } from '../types';
 import type { ScrapeContext } from './scrapeContext';
-import { scrapeJob } from './scrapeJob';
+import { scrapeJob, type ScrapeJobOptions } from './scrapeJob';
+import { scrapeJobFromLocator } from './scrapeJobFromLocator';
 import { isStaleResult } from './isStaleResult';
+import type { LoadedJob } from './collectJobListState';
+import { resolveLoadedJobItem } from './resolveLoadedJobItem';
 
 export async function scrapeJobAndRecord(
     ctx: ScrapeContext,
@@ -11,6 +14,8 @@ export async function scrapeJobAndRecord(
         preClickDelayMs?: number;
         /** Which pass this call belongs to; `retryStaleJobs` is the only caller that passes `'retry'`. */
         pass?: 'first' | 'retry';
+        /** Unique runScrape target; absent preserves the public raw-index path. */
+        loadedJob?: LoadedJob;
     } = {},
 ): Promise<JobResult> {
     ctx.onProgress?.({ type: 'job:start', index, total: ctx.totalJobs });
@@ -18,7 +23,7 @@ export async function scrapeJobAndRecord(
     // scrapeJob emits it from its catch block too — where there is no
     // successful return to hang it on.
     let diagnostics: StaleDiagnostics | undefined;
-    const result = await scrapeJob(ctx.page, index, {
+    const scrapeOptions: ScrapeJobOptions = {
         preClickDelayMs: options.preClickDelayMs,
         seenSourceJobIds: ctx.seenSourceJobIds,
         runTimestamp: ctx.runTimestamp,
@@ -47,7 +52,23 @@ export async function scrapeJobAndRecord(
                   ctx.onJobDiagnostics?.(record);
               }
             : undefined,
-    });
+    };
+    let result: JobResult;
+    if (options.loadedJob) {
+        const resolved = await resolveLoadedJobItem(
+            ctx.page,
+            options.loadedJob,
+        );
+        result = await scrapeJobFromLocator(
+            ctx.page,
+            index,
+            resolved.jobItem,
+            resolved.expectedSourceJobId,
+            scrapeOptions,
+        );
+    } else {
+        result = await scrapeJob(ctx.page, index, scrapeOptions);
+    }
     results[index] = result; // indexed write (not push) so a retry replaces, not appends
     ctx.onProgress?.(
         isStaleResult(result)

@@ -2,6 +2,27 @@
 
 All notable changes to this project are documented in this file.
 
+## v0.13.0
+
+### Fixed
+
+- Both loading phases now continue through overlapping batches containing only IDs already present in the rendered list. Stability requires neither raw-card nor unique-posting progress, allowing duplicate-only `start=25` and `start=50` responses to advance to later pagination that introduces new jobs (GitHub issue #39).
+- `runScrape` now traverses the ordered first occurrence of each distinct posting instead of the first N raw DOM positions. Unique postings after duplicate rows are no longer missed, and parseable cards are re-located by `sourceJobId` before their first pass and optional retry.
+
+### Changed
+
+- `runScrape().results`, `jobs:found.total`, and job progress use contiguous logical indices over distinct posting IDs in first-list-occurrence order. `maxJobs` is applied after deduplication, and raw-only growth never emits an inflated `jobs:loading` count.
+- Cards whose ID cannot be parsed remain separate logical entries so their existing identity failure stays visible. Exported `scrapeJob(page, index, options)` and `scrapeAllJobsOnce` retain their raw-index behavior, including `duplicateOfIdx`; ordinary `runScrape` results now normally have `duplicateOfIdx: null`.
+- Existing options, event variants, selectors, function signatures, defaults, and public type shapes are unchanged. `maxScrollAttempts` and `maxSeeMoreClicks` remain the final bounds if LinkedIn appends duplicates indefinitely.
+- The package version is `0.13.0`.
+
+### Validation
+
+- A live headless Playwright guest search for `Software Engineer` in Germany posted in the past month reproduced the exact overlap on 2026-09-09: the page began at 60 raw rows / 60 unique jobs, `start=25` reached 70 / 60, `start=50` reached 80 / 60, and `start=75` reached 90 / 70. Scrolling continued to 110 / 90; after a 429 at scroll `start=150`, the click phase successfully loaded `start=150`, `175`, and `200`, finishing at 140 / 120. Progress emitted only the truthful unique totals 60, 70, 80, 90, 100, 110, and 120. A traversal of the final mapping resolved all 120 distinct IDs exactly once with zero mismatches.
+- The live probe stopped at its configured `maxSeeMoreClicks: 3` with the button still visible and no viewed-all banner. It proves progression and complete traversal of the 120 distinct cards loaded within that bound; it does not claim exhaustion of LinkedIn's guest results.
+- Focused coverage includes duplicate-only growth followed by later unique growth in both loading phases, true exhaustion, raw-duplicate bounds, snapshot identity fallback, unique-card mapping beyond duplicate rows, contiguous logical indices, post-deduplication `maxJobs`, and mapped retries.
+- The focused loader/mapping suite passes 19/19 tests and the full offline suite passes 251/251 tests.
+
 ## v0.12.0
 
 ### Fixed

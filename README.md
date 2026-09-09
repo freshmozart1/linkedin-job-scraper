@@ -1,6 +1,6 @@
 # linkedin-job-scraper
 
-Playwright-driven scraper for LinkedIn's public/guest job search results (no login required). Loads all jobs on a search via infinite scroll and "See more jobs" pagination, then scrapes title/company/description for every job card, follows each card's company link to collect that company's office addresses, and detects duplicates and stale results along the way.
+Playwright-driven scraper for LinkedIn's public/guest job search results (no login required). Loads jobs via infinite scroll and "See more jobs" pagination, then scrapes title/company/description once per distinct posting, follows each posting's company link to collect that company's office addresses, and detects stale results along the way.
 
 Every search parameter is caller-supplied — there are no fixed defaults for location, date posted, experience level, job type, etc. Every engine timing/retry constant is likewise overridable.
 
@@ -53,7 +53,9 @@ Only `keywords` is required. Everything else (`location`, `geoId`, `datePosted`,
 
 ## `ScraperOptions`
 
-Every engine tuning constant (browser `headless`/`viewport`, scroll/click retry limits, inter-job delay, overlay-clear timing) is optional and defaults to this package's own historically-working values — nothing is hardcoded inside the engine. `maxJobs` caps how many of the loaded jobs actually get *scraped* — the load/discovery phase (scroll + "See more") always runs to completion first and is unaffected; only the scrape loop afterward stops early. Omitted (the default) scrapes every job found.
+Every engine tuning constant (browser `headless`/`viewport`, scroll/click retry limits, inter-job delay, overlay-clear timing) is optional and defaults to this package's own historically-working values — nothing is hardcoded inside the engine. `maxJobs` caps how many distinct loaded postings actually get *scraped* — after deduplication and in first-list-occurrence order. The load/discovery phase (scroll + "See more") always reaches its own explicit-end, stability, abort, or safety-bound condition first and is unaffected by `maxJobs`; only the scrape loop afterward is capped. Omitted (the default) scrapes every distinct posting loaded within those bounds.
+
+During discovery, `stableScrollsToStop` and `stableClicksToStop` count consecutive scroll reads or clicks where neither the unique-job count nor the raw rendered-list count progresses. LinkedIn sometimes appends overlapping batches made entirely of duplicate IDs; those rows are allowed to advance pagination without inflating `jobs:loading` or the final unique total. `maxScrollAttempts` and `maxSeeMoreClicks` remain the defensive bounds if raw duplicate rows continue arriving indefinitely.
 
 `shouldScrapeJob(identity)` is a pre-click filter: called with a job card's list-level identity — `title`, `sourceUrl`, `sourceHostname`, `sourceJobId`, `companyUrl`, `location`, `postedAt` (see `JobCardIdentity`) — right after it's read off the card, but *before* the card is clicked. Return `false` to skip that job's full detail scrape entirely (no click, no company lookup) and record a `status: 'skipped'` result at that index instead. Omitted (the default), every job is scraped as before.
 
@@ -65,7 +67,7 @@ scraperOptions: {
 
 Must be synchronous — the return value is checked directly, so a `Promise` (from an `async` function) is always truthy and the skip branch would never fire. Resolve any async work (e.g. against your own database) before calling `runScrape`.
 
-Normally called once per job card, but a job whose first pass came back `'success'` yet stale, or failed because the detail pane never proved its identity, gets exactly one deferred retry. That pass consults this callback again — a stateful predicate can see the same job twice with different answers, and a retry that flips to `false` replaces the earlier result with an empty `'skipped'` one.
+Normally called once per distinct posting, but a job whose first pass came back `'success'` yet stale, or failed because the detail pane never proved its identity, gets exactly one deferred retry. That pass consults this callback again — a stateful predicate can see the same job twice with different answers, and a retry that flips to `false` replaces the earlier result with an empty `'skipped'` one.
 
 ### Time budgets
 
@@ -179,11 +181,11 @@ interface ScrapeOutcome {
 
 `stoppedEarly` is absent on a run that scraped every job it found — which is every run that doesn't set [`maxRunDurationMs`](#time-budgets). It is `'run-time-budget'` when that budget ran out first, in which case `results` is short of the `total` reported by `jobs:found` (and is `[]` when the budget expired during the job-loading phase, before any job was scraped or `jobs:found` was even emitted). Existing consumers are unaffected: the field is additive, and a run without a run budget can never set it.
 
-Otherwise `results` holds one entry per job the engine considered, ordered by list position — `results[i].index === i`. That's the full search count, or `scraperOptions.maxJobs` when it's set and smaller. Nothing is filtered out: duplicates, failed scrapes (including a list item with no `<h3>`, which isn't a real job card), jobs abandoned on `perJobTimeoutMs`, and jobs `shouldScrapeJob` skipped without ever being clicked all keep their slot. A stale result or detail-identity failure selected for the deferred retry appears once, at its own index, holding the retry's replacement result.
+Otherwise `results` holds one entry per distinct posting ID, ordered by its first list occurrence, with contiguous logical indices — `results[i].index === i`. That's the unique discovered count, or `scraperOptions.maxJobs` when it's set and smaller. Duplicate raw cards are removed before traversal; failed scrapes, jobs abandoned on `perJobTimeoutMs`, and jobs `shouldScrapeJob` skipped without ever being clicked keep their logical slot. A card whose posting ID cannot be parsed is retained individually so its identity failure remains visible instead of disappearing. A stale result or detail-identity failure selected for the deferred retry appears once, at its own index, holding the retry's replacement result.
 
 ```ts
 interface JobResultBase {
-  index: number;                    // position in the loaded list
+  index: number;                    // logical position among distinct loaded postings
   companyMismatch: boolean;         // list-pane company disagreed with detail-pane company
   sourceJobIdMismatch: boolean;     // detail pane's own job ID disagreed with the clicked job's
   lateOverlayDetected: boolean;     // an overlay was over the pane when this job's data was read, however it was then closed
@@ -297,10 +299,10 @@ The three staleness signals, present on both variants (always `false` on a faile
 
 #### `duplicateOfIdx`
 
-LinkedIn's guest pagination can re-serve an earlier page verbatim, so repeats are scraped in full and only marked via this field.
+`runScrape` removes repeated posting IDs before traversal, so ordinary results normally report `null` here. The field remains for compatibility and for direct callers of the lower-level `scrapeJob` / `scrapeAllJobsOnce` APIs, which deliberately retain raw-index behavior.
 
-- `null` on first (and only) occurrences; otherwise the index of the first job with the same `sourceJobId`.
-- Filter on `duplicateOfIdx === null` if you want each posting once.
+- `null` on first (and only) occurrences; otherwise the raw index of the first job with the same `sourceJobId` for a direct low-level traversal.
+- `runScrape` already returns each parsed posting once; no consumer-side duplicate filter is needed.
 - Stays `null` whenever `sourceJobId` is `null`, since identity can't be established — including on a `'failed'` result whose failure happened before identity was read.
 - A `'skipped'` result is never itself registered as the "first occurrence" of its `sourceJobId` — a later occurrence of the same posting that *does* get scraped will not point back at a skipped one. But a skipped result still reports `duplicateOfIdx` against an *earlier* index that already scraped the same posting, if there was one.
 
@@ -405,8 +407,8 @@ type ScrapeProgressEvent =
     };
 ```
 
-- `jobs:loading` — the unique job count changed during the scroll/click loading phase (in practice, grew). `count` is the number of distinct posting IDs currently in the list, not a delta; it fires several times per run, and not at all if loading never makes progress. Not capped by `maxJobs` — loading always discovers the full search before scraping starts, so `count` here can exceed the `total` reported next.
-- `jobs:found` — loading finished; `total` is the number of jobs about to be scraped and is final for the run. Reflects `scraperOptions.maxJobs` when set.
+- `jobs:loading` — the unique posting count changed during the scroll/click loading phase (in practice, grew). `count` is the number of distinct posting IDs currently in the list, not a delta; raw duplicate growth resets loader stability but emits no event. Not capped by `maxJobs` — loading discovers as many cards as LinkedIn exposes before an explicit-end, stability, abort, or configured safety-bound condition, so `count` here can exceed the `total` reported next.
+- `jobs:found` — loading finished; `total` is the number of distinct postings about to be scraped and is final for the run. Reflects `scraperOptions.maxJobs` when set.
 - `job:start` — about to scrape the job at `index` (0-based) out of `total`.
 - `job:done` — a job finished scraping and the result looks trustworthy. This is also the event a `status: 'failed'` job emits — check `result.status`, don't assume done means scraped.
 - `overlay:undismissed` — a blocking overlay could not be closed by clicking a control inside it or by pressing `Escape`, so it was either forcibly neutralized (`neutralized: true` — its `--visible` modifier stripped and `pointer-events`/`visibility` forced off, which unblocks the page) or was still there when the clear gave up (`neutralized: false`). `diagnostics` carries what the overlay was — its collapsed text, its full class list, and the accessible name of every control inside it — or `null` if the read itself failed. Not tied to a job index, and *not* emitted on the ordinary path where a click or `Escape` closed the overlay: that happens on virtually every guest page load. A single stuck overlay can emit this several times for one job, since each clear site reports independently.

@@ -11,7 +11,7 @@ export interface ScrollToListItemResult {
 // so the browser globals are named through a structural cast. The <li>
 // index is passed as an explicit evaluate() argument (JSON-serialized, not
 // a closure) rather than read from a closed-over variable, which
-// page.evaluate() can't do (see collectJobIds.ts). `height` is null on
+// page.evaluate() can't do (see collectJobListState.ts). `height` is null on
 // element *absence*, never on a zero rendered height — a real <li> (e.g. a
 // separator/ad card) can legitimately have zero height, and that must not
 // be mistaken for "past the end of the list". `renderedCount` is the live
@@ -20,7 +20,7 @@ export interface ScrollToListItemResult {
 // shrank below our resume point" (LinkedIn re-serving a shorter page).
 //
 // Hardcoded literally (page.evaluate can't close over selectors.ts) — keep
-// in sync with JOB_LIST_SELECTOR in ../selectors, and collectJobIds.ts.
+// in sync with JOB_LIST_SELECTOR in ../selectors, and collectJobListState.ts.
 export async function scrollToListItem(
     page: Page,
     index: number,

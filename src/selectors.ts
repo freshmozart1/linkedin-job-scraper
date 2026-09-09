@@ -2,8 +2,9 @@
 // Exported so consumers (and this package's own tests) don't have to
 // hand-duplicate these strings.
 //
-// JOB_LIST_SELECTOR is also hardcoded literally inside collectJobIds()'s and
-// scrollToListItem()'s page.evaluate() calls (scraper/collectJobIds.ts and
+// JOB_LIST_SELECTOR is also hardcoded literally inside collectJobListState()'s
+// and scrollToListItem()'s page.evaluate() calls
+// (scraper/collectJobListState.ts and
 // scraper/scrollToListItem.ts — page.evaluate serializes the callback via
 // toString(), so it can't close over this module's exports) — keep all
 // three copies in sync if this ever changes.
@@ -78,7 +79,7 @@ export const DETAIL_PANE_SELECTOR =
 // Company page ("Locations" section). COMPANY_LOCATION_ITEM_SELECTOR and
 // COMPANY_PRIMARY_TAG_SELECTOR are also hardcoded literally inside
 // readRawLocations()'s page.evaluate() in companyLookup.ts, for the same
-// reason collectJobIds() duplicates JOB_LIST_SELECTOR — keep both copies in
+// reason collectJobListState() duplicates JOB_LIST_SELECTOR — keep both copies in
 // sync if these ever change.
 export const COMPANY_LOCATIONS_SECTION_SELECTOR = 'section.locations';
 export const COMPANY_LOCATION_ITEM_SELECTOR = 'section.locations li';

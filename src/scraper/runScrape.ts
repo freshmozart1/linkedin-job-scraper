@@ -9,7 +9,7 @@ import { clearBlockingOverlays } from './clearBlockingOverlays';
 import { toOverlayClearSettings } from './toOverlayClearSettings';
 import { loadAllJobs } from './loadAllJobs';
 import { clampTotalJobs } from './clampTotalJobs';
-import { scrapeAllJobsOnce } from './scrapeAllJobsOnce';
+import { scrapeLoadedJobsOnce } from './scrapeLoadedJobsOnce';
 import { retryStaleJobs } from './retryStaleJobs';
 import { ScrapeAbortedError } from './ScrapeAbortedError';
 import { createRunTimeBudget } from './runTimeBudget';
@@ -109,7 +109,7 @@ export const runScrape: RunScraper = async ({
             onProgress,
         });
 
-        const discoveredJobs = await loadAllJobs(
+        const loadedJobList = await loadAllJobs(
             page,
             scraperOptions,
             onProgress,
@@ -125,9 +125,10 @@ export const runScrape: RunScraper = async ({
             throw new ScrapeAbortedError({ results, url: searchUrl });
         if (runBudget.exceededReason()) return stoppedOnRunBudget();
         const totalJobs = clampTotalJobs(
-            discoveredJobs,
+            loadedJobList.uniqueCount,
             scraperOptions?.maxJobs,
         );
+        const loadedJobs = loadedJobList.uniqueJobs.slice(0, totalJobs);
         onProgress?.({ type: 'jobs:found', total: totalJobs });
 
         const ctx: ScrapeContext = {
@@ -159,11 +160,15 @@ export const runScrape: RunScraper = async ({
                 : undefined,
         };
 
-        const retryIndices = await scrapeAllJobsOnce(ctx, results);
+        const retryIndices = await scrapeLoadedJobsOnce(
+            ctx,
+            results,
+            loadedJobs,
+        );
         if (signal?.aborted)
             throw new ScrapeAbortedError({ results, url: searchUrl });
         if (runBudget.exceededReason()) return stoppedOnRunBudget();
-        await retryStaleJobs(ctx, results, retryIndices);
+        await retryStaleJobs(ctx, results, retryIndices, loadedJobs);
         if (signal?.aborted)
             throw new ScrapeAbortedError({ results, url: searchUrl });
         // The stale-retry pass is the last thing a run does, so a budget that

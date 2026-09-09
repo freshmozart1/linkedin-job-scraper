@@ -3,7 +3,10 @@ import type { ScraperOptions, ScrapeProgressEvent } from '../types';
 import { SEE_MORE_BUTTON_SELECTOR } from '../selectors';
 import { scrollLoadPhase } from './scrollLoadPhase';
 import { clickLoadPhase } from './clickLoadPhase';
-import { collectJobIds } from './collectJobIds';
+import {
+    collectJobListState,
+    type JobListState,
+} from './collectJobListState';
 import { toOverlayClearSettings } from './toOverlayClearSettings';
 
 export async function loadAllJobs(
@@ -11,7 +14,7 @@ export async function loadAllJobs(
     scraperOptions: ScraperOptions | undefined,
     onProgress?: (event: ScrapeProgressEvent) => void,
     signal?: AbortSignal,
-): Promise<number> {
+): Promise<JobListState> {
     const seeMoreButton = page.locator(SEE_MORE_BUTTON_SELECTOR);
     const afterScrollCount = await scrollLoadPhase(page, seeMoreButton, {
         maxScrollAttempts: scraperOptions?.maxScrollAttempts,
@@ -27,5 +30,5 @@ export async function loadAllJobs(
         onProgress,
         signal,
     });
-    return (await collectJobIds(page)).size;
+    return collectJobListState(page);
 }

@@ -29,7 +29,7 @@ const SECTIONS_ABOVE_JOB_LIST_SELECTORS = [
 export async function hidePageSectionsAboveJobList(page: Page): Promise<void> {
     // Runs in the browser context; this package compiles without the DOM
     // lib, so the browser globals are named through a structural cast (see
-    // collectJobIds.ts).
+    // collectJobListState.ts).
     await page.evaluate((selectors) => {
         interface MinimalStyledElement {
             style: { display: string; marginTop: string };

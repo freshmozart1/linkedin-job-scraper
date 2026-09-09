@@ -6,20 +6,21 @@ import { scrollLoadPhase, type ScrapeProgressEvent } from '../src';
  * Models the three call shapes scrollLoadPhase() makes through
  * page.evaluate(): the one-time hide-sections call (always the very first
  * evaluate() call it makes, whatever arg it's given — its return value is
- * unused, so it's safe to just swallow), repeated collectJobIds()-shaped
+ * unused, so it's safe to just swallow), repeated collectJobListState()-shaped
  * reads (called with no arg thereafter), and per-<li> scroll calls (called
  * with the <li> index as an explicit numeric arg, expecting
  * `{ height, renderedCount }` back — `height` is `null` once the index is
  * past the currently-rendered range, `renderedCount` is the live list
  * length read in the same call).
  *
- * `jobIdReads` is consumed one array per collectJobIds() read, repeating
+ * `jobIdReads` is consumed one array per collectJobListState() read, repeating
  * its last entry once exhausted. `liInfoAt` is invoked once per per-<li>
  * scroll step, so a test can make it stateful to model LinkedIn appending
  * (or re-serving fewer) <li>s mid-phase.
  */
 function createScrollPage(config: {
     jobIdReads: string[][];
+    onJobIdRead?: () => void;
     liInfoAt?: (index: number) => {
         height: number | null;
         renderedCount: number;
@@ -31,6 +32,7 @@ function createScrollPage(config: {
     } = config;
     let hideSectionsSeen = false;
     let reads = 0;
+    const numericIdByToken = new Map<string, number>();
     return createFakePage({
         evaluate: (arg?: unknown) => {
             if (!hideSectionsSeen) {
@@ -38,10 +40,21 @@ function createScrollPage(config: {
                 return undefined;
             }
             if (typeof arg === 'number') return liInfoAt(arg);
+            config.onJobIdRead?.();
             const batch =
                 jobIdReads[Math.min(reads, jobIdReads.length - 1)] ?? [];
             reads += 1;
-            return batch;
+            return batch.map((token) => {
+                let numericId = numericIdByToken.get(token);
+                if (numericId === undefined) {
+                    numericId = numericIdByToken.size + 1;
+                    numericIdByToken.set(token, numericId);
+                }
+                return {
+                    entityUrn: `urn:li:jobPosting:${numericId}`,
+                    href: null,
+                };
+            });
         },
     });
 }
@@ -64,7 +77,7 @@ describe('scrollLoadPhase()', () => {
         assert.deepEqual(progressEvents, [{ type: 'jobs:loading', count: 5 }]);
     });
 
-    it('stops once the unique job count is stable for three consecutive reads', async ({
+    it('stops once both the unique job count and raw list are stable for three consecutive reads', async ({
         assert,
     }) => {
         const page = createScrollPage({ jobIdReads: [[]] });
@@ -73,6 +86,104 @@ describe('scrollLoadPhase()', () => {
         const count = await scrollLoadPhase(page, seeMoreButton);
 
         assert.equal(count, 0);
+    });
+
+    it('continues through duplicate-only pagination batches until a later batch adds unique jobs', async ({
+        assert,
+    }) => {
+        const initialIds = Array.from({ length: 60 }, (_, i) => `job-${i}`);
+        const duplicateStart25 = [...initialIds, ...initialIds.slice(0, 10)];
+        const duplicateStart50 = [
+            ...duplicateStart25,
+            ...initialIds.slice(10, 20),
+        ];
+        const laterIds = [
+            ...duplicateStart50,
+            ...Array.from({ length: 10 }, (_, i) => `job-${60 + i}`),
+        ];
+        const progressEvents: ScrapeProgressEvent[] = [];
+        let renderedCount = 60;
+
+        const page = createScrollPage({
+            jobIdReads: [
+                initialIds,
+                duplicateStart25,
+                duplicateStart50,
+                laterIds,
+            ],
+            // The first two boundaries model duplicate-only start=25 and
+            // start=50 responses. The third models start=75: its raw rows
+            // arrive first, then the next ID read observes ten new jobs.
+            liInfoAt: (index) => {
+                if (index < renderedCount) {
+                    return { height: 0, renderedCount };
+                }
+                if (renderedCount < 90) {
+                    const countBeforeAppend = renderedCount;
+                    renderedCount += 10;
+                    return {
+                        height: null,
+                        renderedCount: countBeforeAppend,
+                    };
+                }
+                return { height: null, renderedCount };
+            },
+        });
+        const seeMoreButton = createFakeLocator({ isVisible: () => false });
+
+        const count = await scrollLoadPhase(page, seeMoreButton, {
+            onProgress: (event) => progressEvents.push(event),
+        });
+
+        assert.equal(count, 70);
+        assert.equal(renderedCount, 90);
+        assert.deepEqual(progressEvents, [
+            { type: 'jobs:loading', count: 60 },
+            { type: 'jobs:loading', count: 70 },
+        ]);
+    });
+
+    it('uses maxScrollAttempts as the final bound while duplicate raw rows keep arriving', async ({
+        assert,
+    }) => {
+        let renderedCount = 1;
+        let jobIdReads = 0;
+        const progressEvents: ScrapeProgressEvent[] = [];
+        const page = createScrollPage({
+            jobIdReads: [
+                ['job-0'],
+                ['job-0', 'job-0'],
+                ['job-0', 'job-0', 'job-0'],
+            ],
+            onJobIdRead: () => {
+                jobIdReads += 1;
+            },
+            liInfoAt: (index) => {
+                if (index < renderedCount) {
+                    return { height: 0, renderedCount };
+                }
+                const countBeforeAppend = renderedCount;
+                renderedCount += 1;
+                return {
+                    height: null,
+                    renderedCount: countBeforeAppend,
+                };
+            },
+        });
+        const seeMoreButton = createFakeLocator({ isVisible: () => false });
+
+        const count = await scrollLoadPhase(page, seeMoreButton, {
+            maxScrollAttempts: 3,
+            stableScrollsToStop: 1,
+            onProgress: (event) => progressEvents.push(event),
+        });
+
+        assert.equal(count, 1);
+        assert.equal(jobIdReads, 3);
+        assert.equal(renderedCount, 4);
+        assert.deepEqual(progressEvents, [
+            { type: 'jobs:loading', count: 1 },
+        ]);
     });
 
     it('stops after a caller-supplied maxScrollAttempts even when the job count keeps growing', async ({
@@ -97,7 +208,7 @@ describe('scrollLoadPhase()', () => {
 
         await scrollLoadPhase(page, seeMoreButton, { maxScrollAttempts: 1 });
 
-        // hide-sections's one-time call, plus exactly one collectJobIds()
+        // hide-sections's one-time call, plus exactly one collectJobListState()
         // read — the single permitted attempt never reaches a second read.
         assert.equal(evaluateCalls, 2);
     });
@@ -150,7 +261,7 @@ describe('scrollLoadPhase()', () => {
         // first time index 3 comes up empty, that's the ordinary "nothing
         // new yet" case. Only the *second* time index 3 is revisited does
         // the fake report a shrunk list (down to 1 item) — reproducing
-        // collectJobIds.ts's documented re-serve scenario. Kept to a
+        // collectJobListState.ts's documented re-serve scenario. Kept to a
         // handful of items so the real sleep(120) waits this exercises
         // stay bounded.
         const scrolledIndexes: number[] = [];
@@ -215,7 +326,7 @@ describe('scrollLoadPhase()', () => {
         });
 
         assert.equal(count, 0);
-        // Only the one-time hide-sections call — the loop's own collectJobIds()
+        // Only the one-time hide-sections call — the loop's own collectJobListState()
         // read never happens once the signal is already aborted.
         assert.equal(evaluateCalls, 1);
     });

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A single-purpose library: a Playwright driver that scrapes LinkedIn's **public/guest** job search results (no login, no credentials). It loads every job on a search via infinite scroll + "See more jobs" pagination, clicks each job card, and scrapes title/company/`descriptionText` plus the posting's own source identity (`sourceJobId`/`sourceUrl`/`sourceHostname`/`scrapedAt`), with duplicate and stale-result detection built in. It also follows each card's company link and scrapes that company's office addresses into `companyAddresses`.
+A single-purpose library: a Playwright driver that scrapes LinkedIn's **public/guest** job search results (no login, no credentials). It loads the observable job list via infinite scroll + "See more jobs" pagination, clicks the first list occurrence of each distinct posting, and scrapes title/company/`descriptionText` plus the posting's own source identity (`sourceJobId`/`sourceUrl`/`sourceHostname`/`scrapedAt`), with stale-result detection built in. It also follows each card's company link and scrapes that company's office addresses into `companyAddresses`.
 
 Deliberate design constraint: **nothing about the search is hardcoded.** Every `SearchParams` field except `keywords` is optional and simply isn't sent when omitted, and every engine timing/retry constant in `ScraperOptions` is caller-overridable. Product-specific defaults (a fixed location, headless on/off) belong in the consumer, not here. Resist requests to bake a default search into the engine.
 
@@ -39,11 +39,15 @@ There is no lint script; `typecheck` is the correctness gate. The `test` glob is
 - **`src/companyLookup.ts`** — The browser half of the address lookup: its own context, one page, one cache. See the cookie section below, which is the only reason this file exists separately.
 - **`src/scraper/`** — The whole engine, one function per file (e.g. `scrapeJob.ts`, `runScrape.ts`, `clearBlockingOverlays.ts`), with `index.ts` as the folder's own barrel re-exporting exactly the same names `src/index.ts` re-exports from it. Splitting a function out of one of these files still means adding `export` to it and importing it by name from a sibling file — privacy is enforced entirely by what `scraper/index.ts` chooses to re-export, not by what's `export`ed at the file level. The parts that carry non-obvious reasoning:
 
-### Load phases count unique job IDs, never DOM nodes
+### Load phases track raw and unique progress; results traverse unique postings
 
-`scrollLoadPhase` (LinkedIn's automatic infinite scroll, batches of 10 up to 120 jobs) then `clickLoadPhase` (manual "See more jobs" clicks past that). Both measure progress via `collectJobIds()` — a `Set` of LinkedIn posting IDs — because on a long session LinkedIn's guest pagination can **re-serve an earlier page verbatim**, which raw `<li>` counting cannot distinguish from real growth. Scrolling stops the moment the "See more" button appears rather than waiting for growth to stall, since the button can appear first.
+`scrollLoadPhase` (LinkedIn's automatic infinite scroll) then `clickLoadPhase` (manual "See more jobs" clicks once the button appears). Both read `collectJobListState()`, which reports the raw h3-bearing card count and an ordered first-occurrence mapping of unique posting IDs. Identity prefers `data-entity-urn`, falls back to the normalized card href, and retains every unparseable card separately so a markup failure is reported rather than hidden. Scrolling stops the moment the "See more" button appears rather than waiting for growth to stall, since the button can appear first.
 
 `scrollLoadPhase` scrolls exactly one `<li>` at a time, never a single jump to the bottom — LinkedIn's own lazy-load listener only reacts to genuine incremental scroll progress, and a `scrollTo(0, document.body.scrollHeight)` jump never triggers it, which used to cap every run at the ~60 jobs LinkedIn pre-renders on initial load regardless of how many results actually existed (GitHub issue #10). Before scrolling starts, it hides the page sections LinkedIn renders above the job list so each `<li>`'s own rendered height is the exact pixel distance to the next one — see the Testing section below for how this was verified live and a live-only bug it caught.
+
+Unique-count stability alone is not proof that loading is exhausted: LinkedIn can append overlapping `start=25`/`start=50` batches containing only IDs already present in the initial render, before a later batch introduces new jobs (GitHub issue #39). `stableScrollsToStop` and `stableClicksToStop` therefore advance only when both the unique and raw counts are unchanged. Raw-only progress resets stability but never changes reported totals or emits `jobs:loading`; `maxScrollAttempts` and `maxSeeMoreClicks` bound a session that appends duplicate rows forever.
+
+`loadAllJobs` returns the final ordered mapping, not just its count. `runScrape` applies `maxJobs` to that unique mapping, assigns contiguous logical result indices, and re-resolves every parseable posting by exact `sourceJobId` before both the first pass and retry. The recorded raw index is only authoritative for an unparseable card; for a parseable card that disappeared, it is a deliberate failure target protected by an expected-ID check, never permission to scrape whichever card shifted into that slot. The exported `scrapeJob(page, index, options)` and `scrapeAllJobsOnce` stay on their historical raw-index path for direct callers.
 
 ### Overlays can appear at any moment, including mid-click
 
@@ -91,9 +95,9 @@ Two things about the report's shape are load-bearing. `byCombination` carries al
 
 `sourceJobId` prefers `data-entity-urn` but falls back to the trailing ID in `sourceUrl`. Two independent carriers mean one attribute rename does not take duplicate detection and detail-pane verification down together. If neither carrier yields a complete posting ID, `readJobListIdentity` fails the card before any click instead of letting the detail gate guess.
 
-### Duplicates are marked, not dropped
+### `runScrape` drops duplicate occurrences; low-level callers can still mark them
 
-`registerJobOccurrence` maps a posting ID to the index of its **first** occurrence and must never repoint that map — later occurrences and the retry pass (which re-scrapes a job at its own index and must not see itself as a duplicate) all have to resolve to the same first index. Duplicates are still scraped in full; the caller decides whether to show them.
+Ordinary `runScrape` traversal sees one card per parsed posting ID, so its results normally carry `duplicateOfIdx: null`. `registerJobOccurrence` remains load-bearing for direct raw-index callers: it maps a posting ID to the index of its **first** occurrence and must never repoint that map. A retry at the same logical index must not see itself as a duplicate.
 
 ### Progress events
 
@@ -101,7 +105,7 @@ Two things about the report's shape are load-bearing. `byCombination` carries al
 
 ### `maxJobs` caps the scrape, not the load
 
-`clampTotalJobs` is applied exactly once, in `runScrape`, to the count `loadAllJobs` returns — `loadAllJobs` itself always runs to completion regardless of `maxJobs` (GitHub issue #21 scoped it that way deliberately, rather than threading a new parameter through `scrapeAllJobsOnce`/`scrapeJobAndRecord`/`scrapeJob`). Clamping the single `ScrapeContext.totalJobs` field before anything reads it gets the cap for free through everything downstream: `scrapeAllJobsOnce`'s loop bound and every progress event's `total`. `scrapeJob()`'s own `total` parameter — the dead code that surfaced this gap in the first place — was removed as part of the same change, which is a breaking signature change for any direct caller of the exported `scrapeJob` (it now takes `(page, index, options)`).
+`clampTotalJobs` is applied exactly once, in `runScrape`, to `loadAllJobs`'s unique count — `loadAllJobs` itself always runs to completion regardless of `maxJobs` (GitHub issue #21 scoped it that way deliberately). `runScrape` then slices the first N entries from the ordered unique mapping, so duplicate raw positions consume no slots. The single `ScrapeContext.totalJobs` field feeds every progress event's `total`; the internal unique traversal uses the selected mapping's length, while exported `scrapeAllJobsOnce` retains its raw `totalJobs` loop bound.
 
 ### `shouldScrapeJob` skips before the click, not the read
 
@@ -111,7 +115,7 @@ Skipping the job means it's also skipped for duplicate-tracking *registration*: 
 
 ### Cancellation via AbortSignal
 
-`RunScrapeOptions.signal` is checked at the loop checkpoints — the top of the loops in `scrapeAllJobsOnce`/`retryStaleJobs` (before each job) and `scrollLoadPhase`/`clickLoadPhase`/`pollForNewJobs` (before each scroll/click/poll attempt) — *and*, since GitHub issue #28, at the step boundaries inside a job, via `JobBudget` (see the Time budgets section below). Mid-job used to be off limits because a job's click/read sequence had no safe place to stop partway; the per-job budget created those places, and it carries the signal for the same reason it carries a deadline — checked only between jobs, an abort could not take effect until the in-flight job finished, up to the ~100s a stuck one can take. That job is then recorded as an ordinary `status: 'failed'` with `error: 'Scrape aborted'` and whatever identity it had read, so it keeps an honest slot in `ScrapeAbortedError.partial.results`.
+`RunScrapeOptions.signal` is checked at the loop checkpoints — the top of the first-pass/retry job loops and `scrollLoadPhase`/`clickLoadPhase`/`pollForJobListProgress` (before each scroll/click/poll attempt) — *and*, since GitHub issue #28, at the step boundaries inside a job, via `JobBudget` (see the Time budgets section below). Mid-job used to be off limits because a job's click/read sequence had no safe place to stop partway; the per-job budget created those places, and it carries the signal for the same reason it carries a deadline — checked only between jobs, an abort could not take effect until the in-flight job finished, up to the ~100s a stuck one can take. That job is then recorded as an ordinary `status: 'failed'` with `error: 'Scrape aborted'` and whatever identity it had read, so it keeps an honest slot in `ScrapeAbortedError.partial.results`.
 
 Every loop checkpoint still only *breaks its loop early*; none of them know about `ScrapeAbortedError`. `runScrape` is the sole place that translates an abort into a rejection (checking `signal?.aborted` once before `chromium.launch`, and again after `loadAllJobs`, `scrapeAllJobsOnce`, and `retryStaleJobs` each return) — keeping that translation in one place instead of duplicating it across every sub-function, and keeping each sub-function's own contract (and tests) about "stopping early," not about the public error type. `createJobBudget` is the one other reader of `signal?.aborted`, and it throws a plain `Error`, never `ScrapeAbortedError`, for exactly that reason. Every one of those throws sits inside `runScrape`'s existing `try`, so its `finally` still always closes the browser; the one exception is the pre-launch check, which throws before `chromium.launch` runs and therefore has nothing to close yet — the same reason `chromium.launch` itself sits outside that `try` in the first place.
 
@@ -160,9 +164,9 @@ Parsing notes worth keeping: the **last `<p>` in a location `<li>` is always the
 
 ## The missing DOM lib is intentional
 
-`tsconfig.json` sets `"lib": ["es2023"]` with **no** `dom`, so this compiles cleanly as a Node library without leaking browser globals into consumers' type space. The cost: code inside `page.evaluate()` (which runs in the browser) has no DOM types, so `collectJobIds`, `hidePageSectionsAboveJobList`, and `scrollToListItem` name the handful of members they use through a structural `globalThis as unknown as {...}` cast. Don't "fix" those casts by adding `"dom"` to `lib`.
+`tsconfig.json` sets `"lib": ["es2023"]` with **no** `dom`, so this compiles cleanly as a Node library without leaking browser globals into consumers' type space. The cost: code inside `page.evaluate()` (which runs in the browser) has no DOM types, so `collectJobListState`, `hidePageSectionsAboveJobList`, and `scrollToListItem` name the handful of members they use through a structural `globalThis as unknown as {...}` cast. Don't "fix" those casts by adding `"dom"` to `lib`.
 
-Related trap: `page.evaluate` serializes its callback with `toString()`, so it **cannot close over module imports**. `JOB_LIST_SELECTOR` is therefore hardcoded literally inside `collectJobIds` and `scrollToListItem`, and `COMPANY_LOCATION_ITEM_SELECTOR`/`COMPANY_PRIMARY_TAG_SELECTOR` inside `readRawLocations`, in addition to living in `selectors.ts`. All copies are commented; keep them in sync.
+Related trap: `page.evaluate` serializes its callback with `toString()`, so it **cannot close over module imports**. `JOB_LIST_SELECTOR` is therefore hardcoded literally inside `collectJobListState` and `scrollToListItem`, and `COMPANY_LOCATION_ITEM_SELECTOR`/`COMPANY_PRIMARY_TAG_SELECTOR` inside `readRawLocations`, in addition to living in `selectors.ts`. All copies are commented; keep them in sync.
 
 `tsconfig.test.json` overrides `rootDir` to `"."` because the base config's `rootDir: "src"` (needed for a flat `dist/`) doesn't cover `test/**`. Harmless there since that program is `noEmit`.
 

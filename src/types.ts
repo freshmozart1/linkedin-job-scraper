@@ -418,7 +418,7 @@ export interface JobBudget {
  * expressed as an `AbortSignal` rather than as a new parameter on every phase.
  *
  * Every checkpoint that already stops on `signal?.aborted` — `scrollLoadPhase`,
- * `clickLoadPhase`, `pollForNewJobs`, `scrapeAllJobsOnce`, `retryStaleJobs` —
+ * `clickLoadPhase`, `pollForJobListProgress`, and the first-pass/retry loops —
  * then honours the run budget for free, with no change to their contracts,
  * which stay about *stopping early* rather than about any particular error
  * type. `runScrape` remains the only place that tells a caller abort and an
@@ -527,15 +527,21 @@ export interface SearchParams {
 export interface ScraperOptions {
     headless?: boolean;
     viewport?: { width: number; height: number };
+    /** Defensive bound on incremental-scroll passes. */
     maxScrollAttempts?: number;
+    /** Consecutive reads with neither unique-job nor raw-list progress required before stopping. */
     stableScrollsToStop?: number;
+    /** Defensive bound on "See more jobs" clicks. */
     maxSeeMoreClicks?: number;
+    /** Consecutive clicks with neither unique-job nor raw-list progress required before stopping. */
     stableClicksToStop?: number;
     /**
      * Caps how many of the loaded jobs are actually *scraped*; `undefined`
-     * (the default) scrapes every job the search finds. The load/discovery
-     * phase (scroll + "See more") is unaffected and always runs to
-     * completion first — only the scrape loop afterward stops early. See
+     * (the default) scrapes every distinct posting the search finds. Applied
+     * after duplicate posting IDs are collapsed in first-occurrence order.
+     * The load/discovery
+     * phase (scroll + "See more") is unaffected and reaches its own end,
+     * stability, abort, or safety-bound condition first. See
      * `clampTotalJobs`, applied once in `runScrape`. `0` or a negative value
      * scrapes none rather than throwing.
      */
@@ -548,7 +554,7 @@ export interface ScraperOptions {
      * `status: 'skipped'` result at that index instead. Omitted, every job
      * is scraped as before.
      *
-     * Normally called once per job card, but a job whose first pass came
+     * Normally called once per distinct posting, but a job whose first pass came
      * back `'success'` yet stale (see `isStaleResult`) gets exactly one
      * retry via `retryStaleJobs`, which re-reads the list card and consults
      * this callback again — so a stateful predicate can see the same
@@ -821,7 +827,7 @@ export type SnapshotCaptureOutcome =
 export interface StaleDiagnostics {
     /** Stable identity for the run, so concatenated reports never infer boundaries from array order. */
     runId: string;
-    /** Number of list indices considered in this run after maxJobs is applied. */
+    /** Number of logical unique-posting indices considered after maxJobs is applied. */
     totalJobs: number;
     /** The job's index in the run, matching `JobResult.index`. */
     index: number;
