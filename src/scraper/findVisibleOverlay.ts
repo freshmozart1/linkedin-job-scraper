@@ -20,7 +20,7 @@ export async function findVisibleOverlay(page: Page): Promise<Locator | null> {
     // narrow on purpose.
     //
     // Imported, not hardcoded: this is not inside a page.evaluate, so it has
-    // no reason to duplicate the string the way collectJobIds.ts must. It
+    // no reason to duplicate the string the way collectJobListState.ts must. It
     // also has to stay the same string readOverlayDiagnostics and
     // neutralizeOverlay are given, or this would report an overlay those two
     // can't see.

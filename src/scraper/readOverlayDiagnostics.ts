@@ -31,10 +31,10 @@ export async function readOverlayDiagnostics(
 ): Promise<OverlayDiagnostics | null> {
     // Runs in the browser context; this package compiles without the DOM
     // lib, so the browser globals are named through a structural cast (see
-    // collectJobIds.ts). The selectors are passed as an explicit evaluate()
+    // collectJobListState.ts). The selectors are passed as an explicit evaluate()
     // argument — JSON-serialized, not a closure, which page.evaluate cannot
     // do — so ../selectors stays the single source for them rather than
-    // being hardcoded inline the way collectJobIds.ts has to do it (see
+    // being hardcoded inline the way collectJobListState.ts has to do it (see
     // hidePageSectionsAboveJobList.ts for the same idiom).
     const diagnostics = await page.evaluate(
         ({ overlaySelector, buttonSelector, maxTextLength }) => {

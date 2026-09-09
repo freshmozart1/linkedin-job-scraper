@@ -1,4 +1,5 @@
 import type { ScrapeContext } from './scrapeContext';
+import type { LoadedJob } from './collectJobListState';
 import { scrapeJobAndRecord } from './scrapeJobAndRecord';
 import { sleep } from './sleep';
 
@@ -11,7 +12,7 @@ import { sleep } from './sleep';
 //
 // CRAP score here is driven by fallow's *estimated* (not instrumented)
 // coverage defaulting to 0% for this function, not an actual
-// untested-complexity risk — like loadAllJobs/pollForNewJobs, this internal
+// untested-complexity risk — like loadAllJobs/pollForJobListProgress, this internal
 // helper has no dedicated test file (see CLAUDE.md: only the exported
 // subset is driven directly by tests), so the 0% estimate reflects this
 // repo's testing boundary, not real risk.
@@ -20,6 +21,7 @@ export async function retryStaleJobs(
     ctx: ScrapeContext,
     results: import('../types').JobResult[],
     retryIndices: number[],
+    loadedJobs?: readonly LoadedJob[],
 ): Promise<void> {
     const delayBetweenJobsMs = ctx.delayBetweenJobsMs ?? 700;
     for (const i of retryIndices) {
@@ -31,6 +33,7 @@ export async function retryStaleJobs(
         await scrapeJobAndRecord(ctx, results, i, {
             preClickDelayMs: 1000,
             pass: 'retry',
+            loadedJob: loadedJobs?.[i],
         });
         await sleep(delayBetweenJobsMs);
     }

@@ -4,8 +4,8 @@ import type { RunTimeBudget } from '../types';
 // rather than as a new parameter threaded through every phase.
 //
 // Every checkpoint in a run already stops on `signal?.aborted` —
-// scrollLoadPhase, clickLoadPhase, pollForNewJobs, scrapeAllJobsOnce,
-// retryStaleJobs — so composing the budget's timer into that one signal makes
+// scrollLoadPhase, clickLoadPhase, pollForJobListProgress, and both job passes
+// — so composing the budget's timer into that one signal makes
 // all of them honour it for free, with no new plumbing and no change to their
 // contracts, which stay about *stopping early* rather than about any
 // particular error type. runScrape remains the only place that tells the two

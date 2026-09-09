@@ -1,12 +1,14 @@
 import type { Page, Locator } from 'playwright';
 import type { ScrapeProgressEvent } from '../types';
-import { collectJobIds } from './collectJobIds';
+import { collectJobListState } from './collectJobListState';
 import { sleep } from './sleep';
 import { hidePageSectionsAboveJobList } from './hidePageSectionsAboveJobList';
 import { scrollNewlyRenderedListItems } from './scrollNewlyRenderedListItems';
 
 export interface ScrollLoadPhaseOptions {
+    /** Defensive bound on incremental-scroll passes. */
     maxScrollAttempts?: number;
+    /** Consecutive reads with neither unique-job nor raw-list progress required before stopping. */
     stableScrollsToStop?: number;
     onProgress?: (event: ScrapeProgressEvent) => void;
     signal?: AbortSignal;
@@ -27,7 +29,11 @@ export interface ScrollLoadPhaseOptions {
 // at a time instead (scrollNewlyRenderedListItems/scrollToListItem, in
 // their own sibling files), pausing briefly between each so the browser
 // actually dispatches a scroll event per step rather than coalescing them
-// into one.
+// into one. LinkedIn can append overlapping pagination batches whose raw
+// <li> count grows while their unique IDs do not (GitHub issue #39), so an
+// unchanged unique count is only stable when the preceding scroll pass also
+// found no newly rendered list items. `maxScrollAttempts` remains the final
+// bound if duplicate rows keep arriving forever.
 // hidePageSectionsAboveJobList hides the header/filters/alerts LinkedIn
 // renders above the list, once, up front, so each <li>'s own rendered
 // height is exactly the pixel distance needed to bring the next one into
@@ -51,6 +57,7 @@ export async function scrollLoadPhase(
         onProgress,
         signal,
     } = options;
+    let previousRawCount = 0;
     let previousUniqueCount = 0;
     let stableReads = 0;
     let scrolledListItemCount = 0;
@@ -59,17 +66,26 @@ export async function scrollLoadPhase(
 
     for (let attempt = 0; attempt < maxScrollAttempts; attempt++) {
         if (signal?.aborted) break;
-        const currentUniqueCount = (await collectJobIds(page)).size;
+        const currentState = await collectJobListState(page);
+        const rawCountChanged = currentState.rawCount !== previousRawCount;
+        const uniqueCountChanged =
+            currentState.uniqueCount !== previousUniqueCount;
 
-        if (currentUniqueCount === previousUniqueCount) {
+        if (!uniqueCountChanged && !rawCountChanged) {
             stableReads += 1;
             if (stableReads >= stableScrollsToStop) break;
         } else {
             stableReads = 0;
-            onProgress?.({ type: 'jobs:loading', count: currentUniqueCount });
+            if (uniqueCountChanged) {
+                onProgress?.({
+                    type: 'jobs:loading',
+                    count: currentState.uniqueCount,
+                });
+            }
         }
 
-        previousUniqueCount = currentUniqueCount;
+        previousRawCount = currentState.rawCount;
+        previousUniqueCount = currentState.uniqueCount;
 
         if (await seeMoreButton.isVisible().catch(() => false)) break;
 

@@ -7,7 +7,7 @@ export interface FakePageConfig {
     defaultLocator?: Locator;
     /**
      * page.evaluate() is called for several distinct shapes across the
-     * scraper: collectJobIds()-style reads (no arg), scrollLoadPhase()'s
+     * scraper: collectJobListState()-style reads (no arg), scrollLoadPhase()'s
      * one-time hide-sections call (return value unused), and its per-<li>
      * scroll calls (the <li> index as an explicit numeric arg, expecting
      * `{ height, renderedCount }` back — `height` is `null` past the

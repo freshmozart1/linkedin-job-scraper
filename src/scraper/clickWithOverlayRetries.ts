@@ -53,7 +53,7 @@ export interface ClickWithOverlayRetriesOptions {
 //
 // CRAP score here is driven by fallow's *estimated* (not instrumented)
 // coverage defaulting to 0% for this function, not an actual
-// untested-complexity risk — like pollForNewJobs/retryStaleJobs, this
+// untested-complexity risk — like pollForJobListProgress/retryStaleJobs, this
 // internal helper has no dedicated test file (see CLAUDE.md: only the
 // exported subset is driven directly by tests), so the 0% estimate reflects
 // this repo's testing boundary, not real risk. It is exercised through its

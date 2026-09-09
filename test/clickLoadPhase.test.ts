@@ -7,6 +7,19 @@ import {
     type ScrapeProgressEvent,
 } from '../src';
 
+function jobCards(sourceJobIds: string[]) {
+    return sourceJobIds.map((sourceJobId) => ({
+        entityUrn: `urn:li:jobPosting:${sourceJobId}`,
+        href: null,
+    }));
+}
+
+function createJobListReader(reads: string[][]) {
+    let readIndex = 0;
+    return () =>
+        jobCards(reads[Math.min(readIndex++, reads.length - 1)] ?? []);
+}
+
 describe('clickLoadPhase()', () => {
     it('stops immediately when the "viewed all jobs" banner is visible', async ({
         assert,
@@ -73,7 +86,10 @@ describe('clickLoadPhase()', () => {
                     isVisible: () => false,
                 }),
             },
-            evaluate: () => ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'],
+            evaluate: createJobListReader([
+                ['1', '2', '3', '4', '5'],
+                ['1', '2', '3', '4', '5', '6', '7', '8'],
+            ]),
         });
         const progressEvents: ScrapeProgressEvent[] = [];
 
@@ -104,6 +120,7 @@ describe('clickLoadPhase()', () => {
                     isVisible: () => false,
                 }),
             },
+            evaluate: () => [],
         });
 
         await assert.rejects(() =>
@@ -137,5 +154,115 @@ describe('clickLoadPhase()', () => {
         });
 
         assert.equal(clicked, false);
+    });
+
+    it('continues through duplicate-only batches and reports only later unique growth', async ({
+        assert,
+    }) => {
+        let visibilityChecks = 0;
+        let clicks = 0;
+        const seeMoreButton = createFakeLocator({
+            isVisible: () => ++visibilityChecks <= 3,
+            click: () => {
+                clicks += 1;
+            },
+        });
+        const page = createFakePage({
+            locatorsBySelector: {
+                [VIEWED_ALL_JOBS_SELECTOR]: createFakeLocator({
+                    isVisible: () => false,
+                }),
+                [OVERLAY_SELECTOR]: createFakeLocator({
+                    isVisible: () => false,
+                }),
+            },
+            evaluate: createJobListReader([
+                ['1', '2', '3', '4', '5'],
+                ['1', '2', '3', '4', '5', '1'],
+                ['1', '2', '3', '4', '5', '1', '2'],
+                ['1', '2', '3', '4', '5', '1', '2', '6'],
+            ]),
+        });
+        const progressEvents: ScrapeProgressEvent[] = [];
+
+        await clickLoadPhase(page, seeMoreButton, 5, {
+            stableClicksToStop: 1,
+            onProgress: (event) => progressEvents.push(event),
+        });
+
+        assert.equal(clicks, 3);
+        assert.deepEqual(progressEvents, [
+            { type: 'jobs:loading', count: 6 },
+        ]);
+    });
+
+    it('treats no raw or unique growth as true exhaustion', async ({
+        assert,
+    }) => {
+        let clicks = 0;
+        const seeMoreButton = createFakeLocator({
+            isVisible: () => true,
+            click: () => {
+                clicks += 1;
+            },
+        });
+        const page = createFakePage({
+            locatorsBySelector: {
+                [VIEWED_ALL_JOBS_SELECTOR]: createFakeLocator({
+                    isVisible: () => false,
+                }),
+                [OVERLAY_SELECTOR]: createFakeLocator({
+                    isVisible: () => false,
+                }),
+            },
+            evaluate: createJobListReader([['1', '2', '3']]),
+        });
+        const progressEvents: ScrapeProgressEvent[] = [];
+
+        await clickLoadPhase(page, seeMoreButton, 3, {
+            stableClicksToStop: 1,
+            onProgress: (event) => progressEvents.push(event),
+        });
+
+        assert.equal(clicks, 1);
+        assert.deepEqual(progressEvents, []);
+    });
+
+    it('bounds endlessly appended duplicate rows with maxSeeMoreClicks', async ({
+        assert,
+    }) => {
+        let clicks = 0;
+        const seeMoreButton = createFakeLocator({
+            isVisible: () => true,
+            click: () => {
+                clicks += 1;
+            },
+        });
+        const page = createFakePage({
+            locatorsBySelector: {
+                [VIEWED_ALL_JOBS_SELECTOR]: createFakeLocator({
+                    isVisible: () => false,
+                }),
+                [OVERLAY_SELECTOR]: createFakeLocator({
+                    isVisible: () => false,
+                }),
+            },
+            evaluate: createJobListReader([
+                ['1'],
+                ['1', '1'],
+                ['1', '1', '1'],
+                ['1', '1', '1', '1'],
+            ]),
+        });
+        const progressEvents: ScrapeProgressEvent[] = [];
+
+        await clickLoadPhase(page, seeMoreButton, 1, {
+            maxSeeMoreClicks: 3,
+            stableClicksToStop: 1,
+            onProgress: (event) => progressEvents.push(event),
+        });
+
+        assert.equal(clicks, 3);
+        assert.deepEqual(progressEvents, []);
     });
 });

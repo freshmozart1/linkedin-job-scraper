@@ -5,7 +5,7 @@ import { scrollToListItem } from './scrollToListItem';
 // LinkedIn's own automatic infinite scroll caps out around 120 items before
 // switching to the manual "See more jobs" button (see scrollLoadPhase.ts's
 // top comment) — this bound is a defensive backstop against an unbounded
-// loop, the same way pollForNewJobs (./pollForNewJobs) caps its own poll
+// loop, the same way pollForJobListProgress caps its own poll
 // count, and should never actually be reached in practice. It also bounds
 // the reset-and-rewalk path below, so a repeatedly shrinking list still
 // can't loop forever.
@@ -22,7 +22,7 @@ const MAX_LIST_ITEMS_PER_SCROLL_PASS = 200;
 //
 // LinkedIn's guest infinite scroll can also, on a long enough session, stop
 // returning genuinely new pages and instead re-serve an earlier, shorter
-// one (collectJobIds.ts documents this as real). Resuming from a fixed
+// one (collectJobListState.ts documents this as real). Resuming from a fixed
 // `fromIndex` that no longer exists in that shorter list would otherwise
 // stall forever — every subsequent call finds nothing at that index and
 // returns it unchanged. `scrollToListItem` reports the live `renderedCount`
