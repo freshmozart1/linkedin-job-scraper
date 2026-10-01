@@ -169,6 +169,8 @@ It writes one collision-proof JSON per run and keyword plus a combined JSON repo
 
 `runScrape` resolves once every job has been scraped and the browser it launched has been closed. If the run throws, nothing is returned — collect partial data from `onProgress` as the run goes, or, for a cancelled run specifically, from the thrown `ScrapeAbortedError` itself (see [Cancellation](#cancellation) below). The one case that resolves *without* every job having been scraped is `scraperOptions.maxRunDurationMs` running out, which is flagged by `stoppedEarly`.
 
+An initial search navigation with no HTTP response, an unsuccessful HTTP status (such as 403, 429 or 500), or a destination outside the requested LinkedIn guest-search route rejects before `jobs:found` is emitted. The error identifies the HTTP status or destination without including redirect query parameters, and normal browser cleanup still runs. Country subdomains, query changes and a trailing slash are accepted; a successful search with zero matches still resolves with `results: []`. Cancellation or run-budget expiry during navigation takes precedence over interpreting its response as a search failure.
+
 ```ts
 interface ScrapeOutcome {
   results: JobResult[];

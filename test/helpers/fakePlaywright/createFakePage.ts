@@ -1,4 +1,4 @@
-import type { Page, Locator } from 'playwright';
+import type { Page, Locator, Response } from 'playwright';
 import { createFakeLocator } from './createFakeLocator';
 
 export interface FakePageConfig {
@@ -37,11 +37,11 @@ export interface FakePageConfig {
      * makes it a stable base for resolving relative job hrefs.
      */
     url?: () => string;
-    /** Company-page navigation. Receives the URL so tests can count and assert on loads. */
+    /** Navigation, including an optional HTTP response for search validation. */
     goto?: (
         url: string,
         options?: { waitUntil?: string; timeout?: number },
-    ) => void | Promise<void>;
+    ) => Response | null | void | Promise<Response | null | void>;
     /**
      * Backs `page.keyboard.press(key)` — clearBlockingOverlays' Escape
      * fallback. Left unconfigured, `page.keyboard` is absent entirely, which
@@ -74,8 +74,7 @@ export function createFakePage(config: FakePageConfig = {}): Page {
             url: string,
             options?: { waitUntil?: string; timeout?: number },
         ) => {
-            if (config.goto) await config.goto(url, options);
-            return null;
+            return (await config.goto?.(url, options)) ?? null;
         },
         // Only present when configured, mirroring a real page whose keyboard
         // has gone away — see FakePageConfig.keyboardPress.
