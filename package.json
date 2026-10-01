@@ -1,6 +1,6 @@
 {
   "name": "linkedin-job-scraper",
-  "version": "0.13.0",
+  "version": "0.13.1",
   "description": "Playwright-driven scraper for LinkedIn's public/guest job search results — no fixed search params, no login.",
   "private": true,
   "repository": {
@@ -14,7 +14,8 @@
   ],
   "scripts": {
     "prepare": "npm run build",
-    "build": "tsc -p tsconfig.json",
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "build": "npm run clean && tsc -p tsconfig.json",
     "test": "node --import tsx --test \"test/*.test.ts\"",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json"
   },

@@ -13,8 +13,9 @@ This scrapes an unofficial, moving surface — LinkedIn's markup and anti-bot ga
 ## Commands
 
 ```bash
-npm run build       # tsc -p tsconfig.json -> dist/ (JS + .d.ts + sourcemaps)
-npm test            # node --import tsx --test "test/*.test.ts"  (236 tests, no browser)
+npm run build       # clean dist/, then tsc -> JS + .d.ts + sourcemaps
+npm run clean       # remove only the generated dist/ directory
+npm test            # node --import tsx --test "test/*.test.ts" (offline, no browser)
 npm run typecheck   # tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json
 
 # single test file / single test by name:
@@ -25,6 +26,8 @@ node --import tsx --test --test-name-pattern "registerJobOccurrence" test/scrape
 There is no lint script; `typecheck` is the correctness gate. The `test` glob is non-recursive on purpose, so `test/helpers/**` is never collected as a test file.
 
 `prepare` runs `build` on install. That is load-bearing, not cosmetic: `dist/` is gitignored, and the consuming app installs this repo as a **git dependency**, so npm must compile on install or the consumer resolves `main`/`types` to nothing. Don't remove it, and don't commit `dist/`.
+
+`build` explicitly runs `clean` before compiling. TypeScript does not remove output for deleted source files: after `src/scraper.ts` moved to `src/scraper/index.ts`, a leftover `dist/scraper.js` took precedence over the new directory in Node's module resolution (GitHub issue #44). Keep the portable Node.js cleanup in the normal build path, including `prepare`, and keep hand-written files outside `dist/`. `test/build.test.ts` copies the package sources into temporary fixtures, seeds obsolete output, runs the real build/prepare scripts, and checks the package main's current exports. It also verifies fresh preparation without an existing `dist/`; it never rebuilds or deletes another checkout's output.
 
 ## Architecture
 

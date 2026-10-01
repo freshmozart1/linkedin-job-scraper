@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented in this file.
 
+## v0.13.1
+
+### Fixed
+
+- `npm run build` now removes generated `dist/` output with a portable Node.js cleanup step before compiling. Updating a previously built checkout no longer leaves an obsolete `dist/scraper.js` shadowing the current `dist/scraper/index.js` implementation and its public exports (GitHub issue #44). Git-dependency `prepare` continues to use the same build path.
+
+### Validation
+
+- Offline regression coverage runs the actual build and prepare scripts in temporary package fixtures with obsolete scraper output, verifies the package main's current `runScrape` and `ScrapeAbortedError` exports, and checks fresh preparation when `dist/` does not exist. No browser is launched.
+
 ## v0.13.0
 
 ### Fixed

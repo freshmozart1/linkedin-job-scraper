@@ -18,6 +18,7 @@ Every search parameter is caller-supplied — there are no fixed defaults for lo
 - [Progress events](#progress-events)
 - [URL helpers](#url-helpers)
 - [Address helpers](#address-helpers)
+- [Building from source](#building-from-source)
 - [Notes](#notes)
 
 ## Usage
@@ -484,6 +485,12 @@ toCompanyAddresses([{ isPrimary: false, lines: ['Berlin, DE'] }, { isPrimary: tr
 ```
 
 `createCompanyLookup(browser, options)` is exported too, if you want to resolve addresses for a list of company URLs without running a job search.
+
+## Building from source
+
+Run `npm run build` to regenerate `dist/`. The build first removes that generated directory with a portable Node.js cleanup step, so files from removed or renamed source modules cannot shadow the current implementation. Keep hand-written files outside `dist/`.
+
+The `prepare` lifecycle still runs the same build when this repository is installed as a Git dependency. `npm test` includes offline package-build checks for upgrading from obsolete output and preparing a fresh checkout; those tests use temporary fixtures and do not launch a browser.
 
 ## Notes
 
