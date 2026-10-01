@@ -192,6 +192,13 @@ export const runScrape: RunScraper = async ({
         // The report is built here, after both passes, so it covers the
         // retries as well as the first sweep.
         return { results, url: searchUrl, staleReport: staleReport() };
+    } catch (error) {
+        // A failed wait can bypass the normal phase-return checkpoints. Keep
+        // the same caller-abort-first outcome before exposing its error.
+        if (signal?.aborted)
+            throw new ScrapeAbortedError({ results, url: searchUrl });
+        if (runBudget.exceededReason()) return stoppedOnRunBudget();
+        throw error;
     } finally {
         // Debug-only escape hatch; only applies to headed runs (see ScraperOptions).
         const closeAfterScrape =

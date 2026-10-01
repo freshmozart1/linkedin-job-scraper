@@ -1,5 +1,6 @@
 import { describe, it } from 'node:test';
 import { createFakeLocator, createFakePage } from './helpers/fakePlaywright';
+import type { FakeLocatorConfig } from './helpers/fakePlaywright/interfaces';
 import {
     OVERLAY_SELECTOR,
     VIEWED_ALL_JOBS_SELECTOR,
@@ -18,6 +19,34 @@ function createJobListReader(reads: string[][]) {
     let readIndex = 0;
     return () =>
         jobCards(reads[Math.min(readIndex++, reads.length - 1)] ?? []);
+}
+
+function discoveryClickFixture(
+    click: FakeLocatorConfig['click'],
+    onOverlayRead: () => void = () => {},
+) {
+    const observed = { clicks: 0, overlayReads: 0 };
+    const button = createFakeLocator({
+        isVisible: () => true,
+        click: async (options) => {
+            observed.clicks += 1;
+            await click?.(options);
+        },
+    });
+    const page = createFakePage({
+        locatorsBySelector: {
+            [VIEWED_ALL_JOBS_SELECTOR]: createFakeLocator({ isVisible: () => false }),
+            [OVERLAY_SELECTOR]: createFakeLocator({
+                isVisible: () => {
+                    observed.overlayReads += 1;
+                    onOverlayRead();
+                    return false;
+                },
+            }),
+        },
+        evaluate: () => jobCards(observed.clicks >= 2 ? ['1'] : []),
+    });
+    return { page, button, observed };
 }
 
 describe('clickLoadPhase()', () => {
@@ -194,6 +223,70 @@ describe('clickLoadPhase()', () => {
         assert.deepEqual(progressEvents, [
             { type: 'jobs:loading', count: 6 },
         ]);
+    });
+
+    it('does not retry after a caller abort during a failing click', async ({ assert }) => {
+        const controller = new AbortController();
+        const { page, button, observed } = discoveryClickFixture(() => {
+            controller.abort();
+            throw new Error('click blocked');
+        });
+
+        await assert.rejects(
+            clickLoadPhase(page, button, 0, { signal: controller.signal }),
+            /Scrape aborted/,
+        );
+        assert.equal(observed.clicks, 1);
+        assert.equal(observed.overlayReads, 2);
+    });
+
+    it('does not start another retry after an abort during the retry pause', async ({ assert }) => {
+        const controller = new AbortController();
+        const { page, button, observed } = discoveryClickFixture(() => {
+            // The callback runs after the failed-click catch checks the budget,
+            // while the helper is awaiting its pause before the next attempt.
+            setTimeout(() => controller.abort(), 0);
+            throw new Error('click blocked');
+        });
+
+        await assert.rejects(
+            clickLoadPhase(page, button, 0, { signal: controller.signal }),
+            /Scrape aborted/,
+        );
+        assert.equal(observed.clicks, 1);
+        assert.equal(observed.overlayReads, 2);
+    });
+
+    it('does not start a click when cancellation happens during overlay clearing', async ({ assert }) => {
+        const controller = new AbortController();
+        const { page, button, observed } = discoveryClickFixture(
+            () => {},
+            () => controller.abort(),
+        );
+
+        await assert.rejects(
+            clickLoadPhase(page, button, 0, { signal: controller.signal }),
+            /Scrape aborted/,
+        );
+        assert.equal(observed.clicks, 0);
+    });
+
+    it('keeps discovery free of the default per-job deadline', async (t) => {
+        let now = Date.now();
+        t.mock.method(Date, 'now', () => now);
+        const timeouts: Array<number | undefined> = [];
+        const { page, button, observed } = discoveryClickFixture((options) => {
+            timeouts.push(options?.timeout);
+            if (timeouts.length === 1) {
+                now += 60000;
+                throw new Error('transient click failure');
+            }
+        });
+
+        await clickLoadPhase(page, button, 0, { maxSeeMoreClicks: 1 });
+
+        t.assert.equal(observed.clicks, 2);
+        t.assert.deepEqual(timeouts, [4000, 4000]);
     });
 
     it('treats no raw or unique growth as true exhaustion', async ({

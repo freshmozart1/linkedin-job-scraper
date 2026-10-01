@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented in this file.
 
+## v0.13.4
+
+### Fixed
+
+- A failed "See more" discovery click after caller cancellation now rejects with `ScrapeAbortedError` and its partial outcome. Run-budget expiry resolves with `stoppedEarly: 'run-time-budget'`; caller cancellation takes precedence when both occur. Browser cleanup is preserved and genuine click failures still reject unchanged (GitHub issue #43).
+- Discovery passes its stop signal into click retries without imposing a per-job deadline. The retry helper checks before each attempt and after overlay clearing, preventing another click after cancellation during a failed click, retry pause or overlay clear.
+
+### Validation
+
+- Offline public-run regressions cover caller abort, run-budget expiry, their precedence, genuine click errors and cleanup. Click-phase regressions cover retry/overlay cancellation checkpoints and discovery continuing beyond the default per-job duration. No browser or live LinkedIn request is required.
+
 ## v0.13.3
 
 ### Fixed
