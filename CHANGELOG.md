@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented in this file.
 
+## v0.13.3
+
+### Fixed
+
+- Company-page lookups now check the navigation response before reading locations. Unsuccessful HTTP statuses (including 403, 429 and 500) and missing responses return `null` when every attempt fails, preserving the distinction from a successfully read page with no addresses (`[]`) in the run-wide cache (GitHub issue #42).
+- Retries retain earlier successful empty reads and can still upgrade a failed lookup to populated addresses. Existing retry limits and budget-limited cache behavior are preserved.
+
+### Validation
+
+- Offline company-lookup regressions cover HTTP 403/429/500 and missing responses, successful empty pages, mixed retry outcomes, cached provenance, disabled retries, and an aborted job budget. Successful fake navigations explicitly return HTTP 200; no browser or live LinkedIn request is required.
+
 ## v0.13.2
 
 ### Fixed

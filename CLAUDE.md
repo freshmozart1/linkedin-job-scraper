@@ -165,9 +165,11 @@ This is also why the lookup runs on a **dedicated context**: clearing cookies on
 Two more constraints from the same investigation:
 
 - **`fetch()` is answered with HTTP 999.** There is no request-only shortcut; the page has to be genuinely navigated to.
-- **Coverage is ~70%, and the section is intermittent.** The same company can answer with addresses on one load and nothing on the next, so an empty result gets `emptyRetries` (default 1) more attempts — that same budget also covers an `/authwall` bounce and a navigation that throws, so setting it to 0 disables all three. The remaining ~30% genuinely publish nothing. Don't read a partial result as a broken selector.
+- **Coverage is ~70%, and the section is intermittent.** The same company can answer with addresses on one load and nothing on the next, so an empty result gets `emptyRetries` (default 1) more attempts — that same budget also covers an `/authwall` bounce, an unsuccessful or missing HTTP response, and a navigation that throws, so setting it to 0 disables all these retries. The remaining ~30% genuinely publish nothing. Don't read a partial result as a broken selector.
 
 Retries only ever *upgrade* the answer: a failed attempt never overwrites an earlier successful read, because `[]` (page read, company publishes nothing) and `null` (nothing could be read) are distinct answers on `JobResult.companyAddresses` and the loser gets cached for the rest of the run.
+
+The response returned by `page.goto` must exist and pass `response.ok()` before locations are read. HTTP 403/429/500 error documents can also omit `section.locations`; treating that as a successful empty read would cache false provenance for every later job at the company (GitHub issue #42). Missing responses follow the same failure path. Offline lookup fixtures explicitly return HTTP 200 for successful navigations, and cover response failures, mixed retry outcomes, cache provenance, and a calling job aborted during navigation.
 
 Parsing notes worth keeping: the **last `<p>` in a location `<li>` is always the locality line** and everything before it is street — reading the *first* line as the street breaks every address that has no street block. The primary address is marked by the presence of a `.tag-sm` span, matched on presence rather than its "Primary" text, which is subject to localization. Collapsed locations past the first four are hidden with CSS only and are already in the DOM, so nothing needs clicking — but `innerText` returns empty for them, which is why the evaluate reads `textContent`.
 

@@ -1,5 +1,5 @@
 import { describe, it } from 'node:test';
-import type { Page } from 'playwright';
+import type { Page, Response } from 'playwright';
 import { createCompanyLookup, createJobBudget } from '../src/index';
 import type { CompanyLookup, RawCompanyLocation } from '../src/index';
 import {
@@ -14,35 +14,50 @@ const ADESSO = 'https://de.linkedin.com/company/adesso-se';
 interface Recorder {
     gotos: string[];
     clearCookiesCalls: number;
+    locationReads: number;
+}
+
+function navigationResponse(status: number | null): Response | null {
+    if (status === null) return null;
+    return {
+        status: () => status,
+        ok: () => status >= 200 && status < 300,
+    } as Response;
 }
 
 /**
  * Builds a lookup over a fake browser. `locationsFor` answers each navigation
  * with the raw `<li>` data that page would yield — returning `[]` models the
- * page LinkedIn serves with its Locations section stripped out.
+ * page LinkedIn serves with its Locations section stripped out. Navigations
+ * return a successful HTTP 200 response unless `statusFor` overrides it.
  */
 function makeLookup(options: {
     locationsFor: (url: string, attempt: number) => RawCompanyLocation[];
+    statusFor?: (url: string, attempt: number) => number | null;
     landsOn?: (url: string) => string;
     onGoto?: (url: string) => void;
     maxAddressesPerCompany?: number;
     emptyRetries?: number;
 }): Promise<CompanyLookup> & { recorder: Recorder } {
-    const recorder: Recorder = { gotos: [], clearCookiesCalls: 0 };
+    const recorder: Recorder = { gotos: [], clearCookiesCalls: 0, locationReads: 0 };
+    const { statusFor = () => 200 } = options;
     const attemptsByUrl = new Map<string, number>();
     let currentUrl = 'about:blank';
 
     const page: Page = createFakePage({
         url: () => currentUrl,
         goto: (url) => {
+            const attempt = attemptsByUrl.get(url) ?? 0;
+            attemptsByUrl.set(url, attempt + 1);
             recorder.gotos.push(url);
             currentUrl = options.landsOn ? options.landsOn(url) : url;
             options.onGoto?.(url);
+            return navigationResponse(statusFor(url, attempt));
         },
         evaluate: () => {
+            recorder.locationReads += 1;
             const target = recorder.gotos[recorder.gotos.length - 1] ?? '';
-            const attempt = attemptsByUrl.get(target) ?? 0;
-            attemptsByUrl.set(target, attempt + 1);
+            const attempt = (attemptsByUrl.get(target) ?? 1) - 1;
             return options.locationsFor(target, attempt);
         },
     });
@@ -152,6 +167,89 @@ describe('addressesFor()', () => {
         const addresses = await lookup.addressesFor(YATTA);
 
         assert.deepEqual(addresses, []);
+        assert.deepEqual(await lookup.addressesFor(YATTA), []);
+        assert.equal(pending.recorder.gotos.length, 2);
+    });
+
+    for (const status of [403, 429, 500, null]) {
+        const label = status === null ? 'no HTTP response' : `HTTP ${status}`;
+        it(`returns and caches null after ${label} failures without reading locations`, async ({ assert }) => {
+            const pending = makeLookup({
+                locationsFor: () => [],
+                statusFor: () => status,
+            });
+            const lookup = await pending;
+
+            assert.equal(await lookup.addressesFor(YATTA), null);
+            assert.equal(await lookup.addressesFor(YATTA), null);
+            assert.equal(pending.recorder.gotos.length, 2);
+            assert.equal(pending.recorder.clearCookiesCalls, 2);
+            assert.equal(pending.recorder.locationReads, 0);
+        });
+
+        it(`keeps and caches a successful empty read after a retry with ${label}`, async ({ assert }) => {
+            const pending = makeLookup({
+                locationsFor: () => [],
+                statusFor: (_url, attempt) => attempt === 0 ? 200 : status,
+            });
+            const lookup = await pending;
+
+            assert.deepEqual(await lookup.addressesFor(YATTA), []);
+            assert.deepEqual(await lookup.addressesFor(YATTA), []);
+            assert.equal(pending.recorder.gotos.length, 2);
+            assert.equal(pending.recorder.locationReads, 1);
+        });
+
+        it(`returns addresses when ${label} is followed by a successful retry`, async ({ assert }) => {
+            const pending = makeLookup({
+                locationsFor: () => locationsOf('Frankfurt'),
+                statusFor: (_url, attempt) => attempt === 0 ? status : 200,
+            });
+            const lookup = await pending;
+
+            const addresses = await lookup.addressesFor(YATTA);
+
+            assert.deepEqual(addresses?.map((address) => address.city), ['Frankfurt']);
+            assert.deepEqual(await lookup.addressesFor(YATTA), addresses);
+            assert.equal(pending.recorder.gotos.length, 2);
+            assert.equal(pending.recorder.locationReads, 1);
+        });
+    }
+
+    it('does not retry an HTTP failure when emptyRetries is zero', async ({ assert }) => {
+        const pending = makeLookup({
+            locationsFor: () => [],
+            statusFor: () => 500,
+            emptyRetries: 0,
+        });
+        const lookup = await pending;
+
+        assert.equal(await lookup.addressesFor(YATTA), null);
+        assert.equal(pending.recorder.gotos.length, 1);
+        assert.equal(pending.recorder.locationReads, 0);
+    });
+
+    it('does not cache an HTTP failure when the calling job is aborted during navigation', async ({ assert }) => {
+        const controller = new AbortController();
+        const pending = makeLookup({
+            locationsFor: () => locationsOf('Frankfurt'),
+            statusFor: (_url, attempt) => {
+                if (attempt === 0) {
+                    controller.abort();
+                    return 500;
+                }
+                return 200;
+            },
+        });
+        const lookup = await pending;
+        const budget = createJobBudget({ signal: controller.signal });
+
+        assert.equal(await lookup.addressesFor(YATTA, budget), null);
+        assert.equal(pending.recorder.gotos.length, 1);
+        assert.equal(pending.recorder.locationReads, 0);
+
+        const addresses = await lookup.addressesFor(YATTA);
+        assert.deepEqual(addresses?.map((address) => address.city), ['Frankfurt']);
         assert.equal(pending.recorder.gotos.length, 2);
     });
 

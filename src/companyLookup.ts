@@ -29,7 +29,8 @@ export interface CompanyLookupOptions {
    * case it exists for (a page that loads with its Locations section absent,
    * which LinkedIn serves intermittently: the same company can come back with
    * addresses on one load and empty on the next), but the same budget also
-   * covers an `/authwall` bounce and a navigation that throws. So
+   * covers an `/authwall` bounce, an unsuccessful or missing HTTP response,
+   * and a navigation that throws. So
    * `emptyRetries: 0` disables retrying those too, not just empty pages.
    */
   emptyRetries?: number;
@@ -46,7 +47,8 @@ export interface CompanyLookup {
   /**
    * Addresses for one company, with the primary at index 0. Resolves to `[]`
    * when the page was read and publishes none, and to `null` when nothing
-   * could be read at all (no URL, blocked page, navigation error). Never
+   * could be read at all (no URL, blocked page, unsuccessful or missing HTTP
+   * response, navigation error). Never
    * rejects — a company page failing must not fail the job that referenced it.
    *
    * `budget` is the calling job's wall-clock budget, when it has one. It only
@@ -165,11 +167,14 @@ export async function createCompanyLookup(
         // Before every navigation, not just the first: this is the whole
         // reason the section keeps being served. See the file header.
         await context.clearCookies();
-        await page.goto(companyUrl, {
+        const response = await page.goto(companyUrl, {
           waitUntil: 'domcontentloaded',
           timeout: budget?.boundedTimeout(navigationTimeoutMs) ?? navigationTimeoutMs
         });
 
+        // HTTP error documents can omit Locations just like a valid empty
+        // page. Only a successful response can establish an empty result.
+        if (!response?.ok()) continue;
         if (isAuthWall(page.url())) continue;
 
         const addresses = toCompanyAddresses(await readRawLocations(page));
