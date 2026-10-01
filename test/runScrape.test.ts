@@ -1,7 +1,7 @@
 import { describe, it, type TestContext } from 'node:test';
 import { chromium, type Response } from 'playwright';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { runScrape, ScrapeAbortedError, type ScrapeProgressEvent } from '../src';
+import { runScrape, ScrapeAbortedError, SEE_MORE_BUTTON_SELECTOR, type ScrapeProgressEvent } from '../src';
 import {
     createFakeBrowser,
     createFakeContext,
@@ -17,18 +17,21 @@ function searchRun(
         onGoto,
         signal,
         maxRunDurationMs,
+        onSeeMoreClick,
     }: {
         status?: number | null;
         landedUrl?: string;
         onGoto?: () => void | Promise<void>;
         signal?: AbortSignal;
         maxRunDurationMs?: number;
+        onSeeMoreClick?: () => void | Promise<void>;
     } = {},
 ) {
     const observed = {
         browserCloses: 0,
         lookupCloses: 0,
         discoveryReads: 0,
+        clickAttempts: 0,
         events: [] as ScrapeProgressEvent[],
     };
     let currentUrl = 'about:blank';
@@ -43,6 +46,15 @@ function searchRun(
         },
         url: () => currentUrl,
         defaultLocator: createFakeLocator({ isVisible: () => false }),
+        locatorsBySelector: {
+            [SEE_MORE_BUTTON_SELECTOR]: createFakeLocator({
+                isVisible: () => onSeeMoreClick !== undefined,
+                click: async () => {
+                    observed.clickAttempts += 1;
+                    await onSeeMoreClick?.();
+                },
+            }),
+        },
         evaluate: () => {
             observed.discoveryReads += 1;
             return [];
@@ -66,6 +78,7 @@ function searchRun(
             headless: true,
             maxRunDurationMs,
             stableScrollsToStop: 1,
+            clickRetryAttempts: 2,
             overlayClear: { requiredConsecutiveClear: 1 },
             staleDiagnostics: { enabled: false },
         },
@@ -181,5 +194,85 @@ describe('runScrape initial search navigation', () => {
 
         await t.assert.rejects(outcome, ScrapeAbortedError);
         assertCleanedUpBeforeDiscovery(t, observed);
+    });
+});
+
+describe('runScrape discovery click failures', () => {
+    it('reports caller abort with a partial outcome and closes both browser contexts', async (t: TestContext) => {
+        const controller = new AbortController();
+        const { observed, outcome } = searchRun(t, {
+            signal: controller.signal,
+            onSeeMoreClick: () => {
+                controller.abort();
+                throw new Error('locator.click: Timeout 4000ms exceeded');
+            },
+        });
+
+        await t.assert.rejects(outcome, (error: unknown) => {
+            t.assert.ok(error instanceof ScrapeAbortedError);
+            t.assert.deepEqual(error.partial.results, []);
+            t.assert.match(error.partial.url, /linkedin\.com\/jobs\/search/);
+            t.assert.equal(error.partial.stoppedEarly, undefined);
+            return true;
+        });
+        t.assert.equal(observed.clickAttempts, 1);
+        t.assert.equal(observed.browserCloses, 1);
+        t.assert.equal(observed.lookupCloses, 1);
+        t.assert.deepEqual(observed.events, []);
+    });
+
+    it('resolves the stopped-early outcome when the run timer expires during a failing click', async (t: TestContext) => {
+        const timer = new AbortController();
+        t.mock.method(AbortSignal, 'timeout', () => timer.signal);
+        const { observed, outcome } = searchRun(t, {
+            maxRunDurationMs: 1500,
+            onSeeMoreClick: () => {
+                timer.abort();
+                throw new Error('locator.click: Timeout 4000ms exceeded');
+            },
+        });
+
+        const result = await outcome;
+
+        t.assert.equal(result.stoppedEarly, 'run-time-budget');
+        t.assert.deepEqual(result.results, []);
+        t.assert.match(result.url, /linkedin\.com\/jobs\/search/);
+        t.assert.equal(observed.clickAttempts, 1);
+        t.assert.equal(observed.browserCloses, 1);
+        t.assert.equal(observed.lookupCloses, 1);
+        t.assert.deepEqual(observed.events, []);
+    });
+
+    it('keeps caller-abort precedence when the run timer also expires during a failing click', async (t: TestContext) => {
+        const controller = new AbortController();
+        const timer = new AbortController();
+        t.mock.method(AbortSignal, 'timeout', () => timer.signal);
+        const { observed, outcome } = searchRun(t, {
+            signal: controller.signal,
+            maxRunDurationMs: 1500,
+            onSeeMoreClick: () => {
+                timer.abort();
+                controller.abort();
+                throw new Error('locator.click: Timeout 4000ms exceeded');
+            },
+        });
+
+        await t.assert.rejects(outcome, ScrapeAbortedError);
+        t.assert.equal(observed.clickAttempts, 1);
+        t.assert.equal(observed.browserCloses, 1);
+        t.assert.equal(observed.lookupCloses, 1);
+    });
+
+    it('preserves a genuine click error after retries and still closes the browser', async (t: TestContext) => {
+        const clickError = new Error('locator.click: button remained disabled');
+        const { observed, outcome } = searchRun(t, {
+            onSeeMoreClick: () => { throw clickError; },
+        });
+
+        await t.assert.rejects(outcome, (error: unknown) => error === clickError);
+        t.assert.equal(observed.clickAttempts, 2);
+        t.assert.equal(observed.browserCloses, 1);
+        t.assert.equal(observed.lookupCloses, 1);
+        t.assert.deepEqual(observed.events, []);
     });
 });
