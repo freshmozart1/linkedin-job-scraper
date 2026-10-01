@@ -14,6 +14,7 @@ import { retryStaleJobs } from './retryStaleJobs';
 import { ScrapeAbortedError } from './ScrapeAbortedError';
 import { createRunTimeBudget } from './runTimeBudget';
 import { summarizeStaleDiagnostics } from './summarizeStaleDiagnostics';
+import { validateSearchNavigation } from './validateSearchNavigation';
 import type { JobResult, ScrapeOutcome, StaleDiagnostics } from '../types';
 
 export const runScrape: RunScraper = async ({
@@ -66,7 +67,7 @@ export const runScrape: RunScraper = async ({
         diagnosticsEnabled
             ? summarizeStaleDiagnostics(staleRecords)
             : undefined;
-    // Spelled out once rather than at each of the three checkpoints below,
+    // Spelled out once rather than at each checkpoint below,
     // which were returning byte-identical objects and could quietly drift.
     const stoppedOnRunBudget = (): ScrapeOutcome => ({
         results,
@@ -95,7 +96,16 @@ export const runScrape: RunScraper = async ({
             scraperOptions?.companyLookup,
         );
 
-        await page.goto(searchUrl, { waitUntil: 'domcontentloaded' });
+        const searchResponse = await page.goto(searchUrl, {
+            waitUntil: 'domcontentloaded',
+        });
+        // Navigation can finish with an error document after the caller or
+        // run clock already stopped the scrape. Preserve that outcome before
+        // interpreting the response as an independent search failure.
+        if (signal?.aborted)
+            throw new ScrapeAbortedError({ results, url: searchUrl });
+        if (runBudget.exceededReason()) return stoppedOnRunBudget();
+        validateSearchNavigation(searchResponse, page.url(), searchUrl);
 
         await clearBlockingOverlays(page, {
             timeoutMs: scraperOptions?.overlayClear?.timeoutMs ?? 15000,
