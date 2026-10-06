@@ -5,6 +5,7 @@ import { clickWithOverlayRetries } from './clickWithOverlayRetries';
 import type { OverlayClearSettings } from './clearBlockingOverlays';
 import { collectJobListState } from './collectJobListState';
 import { pollForJobListProgress } from './pollForJobListProgress';
+import { createJobBudget } from './jobBudget';
 
 export interface ClickLoadPhaseOptions {
     maxSeeMoreClicks?: number;
@@ -39,6 +40,9 @@ export async function clickLoadPhase(
         overlayClear,
         signal,
     } = options;
+    // Reuse the click helper's stop checks without imposing a per-job
+    // deadline on discovery. The composed signal also carries the run timer.
+    const budget = createJobBudget({ perJobTimeoutMs: 0, signal });
     const viewedAllBanner = page.locator(VIEWED_ALL_JOBS_SELECTOR);
     let stableClicks = 0;
     let previousUniqueCount = initialUniqueCount;
@@ -52,12 +56,10 @@ export async function clickLoadPhase(
         previousRawCount ??= (await collectJobListState(page)).rawCount;
         const beforeClickRawCount = previousRawCount;
         const beforeClickCount = previousUniqueCount;
-        // No `budget`: the per-job budget belongs to a job's scrape, and this
-        // is the discovery phase, which is bounded by maxSeeMoreClicks and by
-        // the signal instead.
         await clickWithOverlayRetries(seeMoreButton, page, {
             maxAttempts: clickRetryAttempts,
             overlayClear: { ...overlayClear, onProgress },
+            budget,
         });
         const currentState = await pollForJobListProgress(
             page,

@@ -2,6 +2,28 @@
 
 All notable changes to this project are documented in this file.
 
+## v0.13.4
+
+### Fixed
+
+- A failed "See more" discovery click after caller cancellation now rejects with `ScrapeAbortedError` and its partial outcome. Run-budget expiry resolves with `stoppedEarly: 'run-time-budget'`; caller cancellation takes precedence when both occur. Browser cleanup is preserved and genuine click failures still reject unchanged (GitHub issue #43).
+- Discovery passes its stop signal into click retries without imposing a per-job deadline. The retry helper checks before each attempt and after overlay clearing, preventing another click after cancellation during a failed click, retry pause or overlay clear.
+
+### Validation
+
+- Offline public-run regressions cover caller abort, run-budget expiry, their precedence, genuine click errors and cleanup. Click-phase regressions cover retry/overlay cancellation checkpoints and discovery continuing beyond the default per-job duration. No browser or live LinkedIn request is required.
+
+## v0.13.3
+
+### Fixed
+
+- Company-page lookups now check the navigation response before reading locations. Unsuccessful HTTP statuses (including 403, 429 and 500) and missing responses return `null` when every attempt fails, preserving the distinction from a successfully read page with no addresses (`[]`) in the run-wide cache (GitHub issue #42).
+- Retries retain earlier successful empty reads and can still upgrade a failed lookup to populated addresses. Existing retry limits and budget-limited cache behavior are preserved.
+
+### Validation
+
+- Offline company-lookup regressions cover HTTP 403/429/500 and missing responses, successful empty pages, mixed retry outcomes, cached provenance, disabled retries, and an aborted job budget. Successful fake navigations explicitly return HTTP 200; no browser or live LinkedIn request is required.
+
 ## v0.13.2
 
 ### Fixed

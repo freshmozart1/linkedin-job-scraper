@@ -20,7 +20,9 @@ export interface ClickWithOverlayRetriesOptions {
      */
     overlayClear?: OverlayClearSettings;
     /**
-     * The job's wall-clock budget, when this click is part of one. Without it
+     * The job's wall-clock budget, when this click is part of one. Discovery
+     * supplies a signal-only budget with the per-job deadline disabled.
+     * Without a budget
      * the four attempts below can stack to ~34s on their local timeouts
      * alone; with it, each of those timeouts is clamped to what the job has
      * left and the retry loop stops as soon as there is nothing left to spend.
@@ -57,9 +59,8 @@ export interface ClickWithOverlayRetriesOptions {
 // internal helper has no dedicated test file (see CLAUDE.md: only the
 // exported subset is driven directly by tests), so the 0% estimate reflects
 // this repo's testing boundary, not real risk. It is exercised through its
-// only two callers, scrapeJob and clickLoadPhase. Cyclomatic 6 and cognitive
-// 11 are both under threshold on their own; only CRAP trips it, at exactly
-// the 6² + 6 that a 0% estimate produces.
+// only two callers, scrapeJob and clickLoadPhase, including aborts during
+// clicks, retry pauses and overlay clears.
 // fallow-ignore-next-line complexity
 export async function clickWithOverlayRetries(
     locator: Locator,
@@ -79,6 +80,9 @@ export async function clickWithOverlayRetries(
     // return, the budget throw, the final rethrow — has to record it.
     try {
         for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            // Includes an abort during the previous retry's pause: no new
+            // overlay clear or click may start after that stop checkpoint.
+            budget?.check();
             attempts = attempt;
             // `null` means the job has too little budget left for a clear to be
             // worth running — see boundedClearTimeout, which exists so a
@@ -112,6 +116,9 @@ export async function clickWithOverlayRetries(
                     startedAt: clearStartedAt,
                 });
             }
+            // Clearing overlays can itself take time. Recheck before starting
+            // the click in case the caller or run timer stopped meanwhile.
+            budget?.check();
             try {
                 await locator.click({ timeout: boundedTimeout(budget, 4000) });
                 return;
