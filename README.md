@@ -120,7 +120,7 @@ The three timing fields apply only to that first clear — every later clear (be
 scraperOptions: {
   companyLookup: {
     navigationTimeoutMs: 20000,    // per company page load
-    emptyRetries: 1,               // extra attempts when an attempt yields no addresses: no Locations section, an authwall bounce, or a navigation error
+    emptyRetries: 1,               // extra attempts for no Locations section, authwall, unsuccessful/missing HTTP response, or navigation error
     delayBetweenLookupsMs: 900,    // pause after a lookup that hit the network; cache hits skip it
     maxAddressesPerCompany: 10,    // default: uncapped — some companies publish 100+
   },
@@ -320,7 +320,8 @@ The hiring company's LinkedIn page, read from the card's company link and normal
 
 Office addresses from that company page, **with the address LinkedIn tags "Primary" at index 0**, present only on a `'success'` result (always `null` on `'failed'`).
 
-- `null` and `[]` mean different things on success: `[]` means the page was read and the company publishes no address, while `null` means no lookup happened or it failed (no `companyUrl`, a blocked page, a navigation error).
+- `null` and `[]` mean different things on success: `[]` means the page was read successfully and the company publishes no address, while `null` means no lookup happened or it failed (no `companyUrl`, a blocked page, an unsuccessful or missing HTTP response, a navigation error).
+- HTTP failures such as 403, 429 and 500 use the existing `companyLookup.emptyRetries` allowance. An unsuccessful or missing response is never read or cached as a verified empty page. A failed retry preserves an earlier successful `[]`; a successful retry with addresses upgrades the result. Repeated lookups reuse the resulting `null`, `[]`, or addresses, except budget-limited failures, which remain uncached.
 - Unlike everything else on `JobResult`, a failed company-page lookup does **not** fail the job; it's the one field that stays nullable on a successful result on purpose.
 - **Expect roughly 70% of companies to return addresses** — the rest genuinely publish none on their guest page. That is normal, not a bug.
 - A run where *nothing* comes back is a different signal; see the note on cookies below.
@@ -387,6 +388,8 @@ try {
 ```
 
 `runScrape` itself still only *rejects* at a safe checkpoint — between jobs, or during the job-loading scroll/click polling loops — and always closes the browser via its own cleanup before it does. But the signal now reaches inside the in-flight job too, at the step boundaries of its own [time budget](#time-budgets): an abort lands within seconds instead of waiting out the ~100s a stuck job can take. That job is recorded at its own index as `status: 'failed'` with `error: 'Scrape aborted'`, carrying whatever identity was read off its list card, so the interrupted job keeps an honest slot rather than disappearing. If you persist results, treat that error as "interrupted", not as a job that genuinely failed.
+
+Discovery's "See more" click retries observe the same stop signal before each attempt and after overlay clearing. Cancellation during a click or retry pause prevents the next attempt; an in-flight browser wait finishes within its existing local timeout before the stop is reported. A failed wait after caller cancellation rejects with `ScrapeAbortedError`; run-budget expiry alone resolves with `stoppedEarly: 'run-time-budget'`. Caller cancellation wins if both happen. Discovery has no per-job deadline, and a click error without either stop condition remains an error.
 
 The rejection is a `ScrapeAbortedError`, not a resolved `ScrapeOutcome`: `error.name === 'AbortError'` (the same convention `fetch` uses) tells a cancelled run apart from any other failure, and `error.partial: ScrapeOutcome` carries whatever `results`/`url` had already been collected at that checkpoint — `results` is `[]` if the signal was already aborted before the run started or during job loading, before any job was scraped.
 

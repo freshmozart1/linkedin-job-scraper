@@ -155,7 +155,8 @@ export interface SuccessfulJobResult extends JobResultBase {
      * only way to tell them apart downstream: `[]` means the company page was
      * read successfully and publishes no address, whereas `null` means no
      * lookup happened or it failed (no `companyUrl`, a blocked page, a
-     * navigation error). Roughly 30% of companies legitimately publish none.
+     * missing or unsuccessful HTTP response, navigation error). Roughly 30%
+     * of companies legitimately publish none.
      */
     companyAddresses: CompanyAddress[] | null;
     /**
@@ -627,8 +628,9 @@ export interface ScraperOptions {
         navigationTimeoutMs?: number;
         /**
          * Extra attempts whenever an attempt yields no addresses: a company page that loads with no
-         * Locations section (LinkedIn serves it intermittently), an `/authwall` bounce, or a
-         * navigation error. `0` disables retrying all three, not just the empty-section case.
+         * Locations section (LinkedIn serves it intermittently), an `/authwall` bounce,
+         * an unsuccessful or missing HTTP response, or a navigation error.
+         * `0` disables retrying all these cases, not just the empty-section case.
          */
         emptyRetries?: number;
         /** Pause after a lookup that actually hit the network; cache hits are not delayed. */
