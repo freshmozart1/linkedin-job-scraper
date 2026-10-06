@@ -2,6 +2,27 @@
 
 All notable changes to this project are documented in this file.
 
+## v0.13.2
+
+### Fixed
+
+- Initial search HTTP failures, missing responses and redirects away from the requested LinkedIn guest-search surface now reject before discovery instead of reporting a successful empty search (GitHub issue #41). Errors identify the HTTP status or destination without exposing redirect query parameters; normal browser cleanup is preserved.
+- Caller cancellation and run-budget expiry during navigation retain their documented outcomes before the returned page is validated. Valid HTTP 200 zero-result searches, country subdomains and trailing-slash/query differences remain supported.
+
+### Validation
+
+- Offline public-API regressions cover HTTP 403/429/500, missing responses, authentication/challenge and unrelated destinations, successful empty searches, cleanup, and caller-abort/run-budget precedence. No browser or live LinkedIn request is required.
+
+## v0.13.1
+
+### Fixed
+
+- `npm run build` now removes generated `dist/` output with a portable Node.js cleanup step before compiling. Updating a previously built checkout no longer leaves an obsolete `dist/scraper.js` shadowing the current `dist/scraper/index.js` implementation and its public exports (GitHub issue #44). Git-dependency `prepare` continues to use the same build path.
+
+### Validation
+
+- Offline regression coverage runs the actual build and prepare scripts in temporary package fixtures with obsolete scraper output, verifies the package main's current `runScrape` and `ScrapeAbortedError` exports, and checks fresh preparation when `dist/` does not exist. No browser is launched.
+
 ## v0.13.0
 
 ### Fixed

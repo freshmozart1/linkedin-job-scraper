@@ -18,6 +18,7 @@ Every search parameter is caller-supplied — there are no fixed defaults for lo
 - [Progress events](#progress-events)
 - [URL helpers](#url-helpers)
 - [Address helpers](#address-helpers)
+- [Building from source](#building-from-source)
 - [Notes](#notes)
 
 ## Usage
@@ -167,6 +168,8 @@ It writes one collision-proof JSON per run and keyword plus a combined JSON repo
 ## Return value: `ScrapeOutcome`
 
 `runScrape` resolves once every job has been scraped and the browser it launched has been closed. If the run throws, nothing is returned — collect partial data from `onProgress` as the run goes, or, for a cancelled run specifically, from the thrown `ScrapeAbortedError` itself (see [Cancellation](#cancellation) below). The one case that resolves *without* every job having been scraped is `scraperOptions.maxRunDurationMs` running out, which is flagged by `stoppedEarly`.
+
+An initial search navigation with no HTTP response, an unsuccessful HTTP status (such as 403, 429 or 500), or a destination outside the requested LinkedIn guest-search route rejects before `jobs:found` is emitted. The error identifies the HTTP status or destination without including redirect query parameters, and normal browser cleanup still runs. Country subdomains, query changes and a trailing slash are accepted; a successful search with zero matches still resolves with `results: []`. Cancellation or run-budget expiry during navigation takes precedence over interpreting its response as a search failure.
 
 ```ts
 interface ScrapeOutcome {
@@ -484,6 +487,12 @@ toCompanyAddresses([{ isPrimary: false, lines: ['Berlin, DE'] }, { isPrimary: tr
 ```
 
 `createCompanyLookup(browser, options)` is exported too, if you want to resolve addresses for a list of company URLs without running a job search.
+
+## Building from source
+
+Run `npm run build` to regenerate `dist/`. The build first removes that generated directory with a portable Node.js cleanup step, so files from removed or renamed source modules cannot shadow the current implementation. Keep hand-written files outside `dist/`.
+
+The `prepare` lifecycle still runs the same build when this repository is installed as a Git dependency. `npm test` includes offline package-build checks for upgrading from obsolete output and preparing a fresh checkout; those tests use temporary fixtures and do not launch a browser.
 
 ## Notes
 

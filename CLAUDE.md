@@ -13,8 +13,9 @@ This scrapes an unofficial, moving surface — LinkedIn's markup and anti-bot ga
 ## Commands
 
 ```bash
-npm run build       # tsc -p tsconfig.json -> dist/ (JS + .d.ts + sourcemaps)
-npm test            # node --import tsx --test "test/*.test.ts"  (236 tests, no browser)
+npm run build       # clean dist/, then tsc -> JS + .d.ts + sourcemaps
+npm run clean       # remove only the generated dist/ directory
+npm test            # node --import tsx --test "test/*.test.ts" (offline, no browser)
 npm run typecheck   # tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json
 
 # single test file / single test by name:
@@ -25,6 +26,8 @@ node --import tsx --test --test-name-pattern "registerJobOccurrence" test/scrape
 There is no lint script; `typecheck` is the correctness gate. The `test` glob is non-recursive on purpose, so `test/helpers/**` is never collected as a test file.
 
 `prepare` runs `build` on install. That is load-bearing, not cosmetic: `dist/` is gitignored, and the consuming app installs this repo as a **git dependency**, so npm must compile on install or the consumer resolves `main`/`types` to nothing. Don't remove it, and don't commit `dist/`.
+
+`build` explicitly runs `clean` before compiling. TypeScript does not remove output for deleted source files: after `src/scraper.ts` moved to `src/scraper/index.ts`, a leftover `dist/scraper.js` took precedence over the new directory in Node's module resolution (GitHub issue #44). Keep the portable Node.js cleanup in the normal build path, including `prepare`, and keep hand-written files outside `dist/`. `test/build.test.ts` copies the package sources into temporary fixtures, seeds obsolete output, runs the real build/prepare scripts, and checks the package main's current exports. It also verifies fresh preparation without an existing `dist/`; it never rebuilds or deletes another checkout's output.
 
 ## Architecture
 
@@ -38,6 +41,12 @@ There is no lint script; `typecheck` is the correctness gate. The `test` glob is
 - **`src/address.ts`** — Pure parsing of a company page's Locations markup into `CompanyAddress[]`. No Playwright import, so all of it is testable offline; `companyLookup.ts` reads the raw text and hands it here.
 - **`src/companyLookup.ts`** — The browser half of the address lookup: its own context, one page, one cache. See the cookie section below, which is the only reason this file exists separately.
 - **`src/scraper/`** — The whole engine, one function per file (e.g. `scrapeJob.ts`, `runScrape.ts`, `clearBlockingOverlays.ts`), with `index.ts` as the folder's own barrel re-exporting exactly the same names `src/index.ts` re-exports from it. Splitting a function out of one of these files still means adding `export` to it and importing it by name from a sibling file — privacy is enforced entirely by what `scraper/index.ts` chooses to re-export, not by what's `export`ed at the file level. The parts that carry non-obvious reasoning:
+
+### Validate initial navigation before discovering jobs
+
+`runScrape` keeps the response returned by the initial `page.goto` and calls `validateSearchNavigation` before overlay clearing or list discovery (GitHub issue #41). Playwright resolves navigation even for HTTP errors, so an error document without cards otherwise looks like a successful empty search. Missing responses and non-success statuses reject actionably. `validateSearchDestination` separately checks that the reached URL remains on a LinkedIn host and the requested search path, allowing country subdomains, changed query strings and a trailing slash. It does not require any cards or introduce new DOM selectors: a valid zero-result search must still succeed. Unexpected destinations are reported without query parameters.
+
+The caller-abort and run-budget checks immediately after navigation precede these validations, so an error page arriving after a cancellation or deadline does not replace the requested stop outcome. All checks remain inside the existing cleanup boundary. `test/runScrape.test.ts` uses the existing fake-browser helpers and Node's built-in method stub to cover HTTP failures, redirected destinations, empty success, cleanup and stop precedence without a browser or network requests.
 
 ### Load phases track raw and unique progress; results traverse unique postings
 
@@ -117,7 +126,7 @@ Skipping the job means it's also skipped for duplicate-tracking *registration*: 
 
 `RunScrapeOptions.signal` is checked at the loop checkpoints — the top of the first-pass/retry job loops and `scrollLoadPhase`/`clickLoadPhase`/`pollForJobListProgress` (before each scroll/click/poll attempt) — *and*, since GitHub issue #28, at the step boundaries inside a job, via `JobBudget` (see the Time budgets section below). Mid-job used to be off limits because a job's click/read sequence had no safe place to stop partway; the per-job budget created those places, and it carries the signal for the same reason it carries a deadline — checked only between jobs, an abort could not take effect until the in-flight job finished, up to the ~100s a stuck one can take. That job is then recorded as an ordinary `status: 'failed'` with `error: 'Scrape aborted'` and whatever identity it had read, so it keeps an honest slot in `ScrapeAbortedError.partial.results`.
 
-Every loop checkpoint still only *breaks its loop early*; none of them know about `ScrapeAbortedError`. `runScrape` is the sole place that translates an abort into a rejection (checking `signal?.aborted` once before `chromium.launch`, and again after `loadAllJobs`, `scrapeAllJobsOnce`, and `retryStaleJobs` each return) — keeping that translation in one place instead of duplicating it across every sub-function, and keeping each sub-function's own contract (and tests) about "stopping early," not about the public error type. `createJobBudget` is the one other reader of `signal?.aborted`, and it throws a plain `Error`, never `ScrapeAbortedError`, for exactly that reason. Every one of those throws sits inside `runScrape`'s existing `try`, so its `finally` still always closes the browser; the one exception is the pre-launch check, which throws before `chromium.launch` runs and therefore has nothing to close yet — the same reason `chromium.launch` itself sits outside that `try` in the first place.
+Every loop checkpoint still only *breaks its loop early*; none of them know about `ScrapeAbortedError`. `runScrape` is the sole place that translates an abort into a rejection (checking `signal?.aborted` once before `chromium.launch`, and again after the initial navigation, `loadAllJobs`, `scrapeLoadedJobsOnce`, and `retryStaleJobs` each return) — keeping that translation in one place instead of duplicating it across every sub-function, and keeping each sub-function's own contract (and tests) about "stopping early," not about the public error type. `createJobBudget` is the one other reader of `signal?.aborted`, and it throws a plain `Error`, never `ScrapeAbortedError`, for exactly that reason. Every one of those throws sits inside `runScrape`'s existing `try`, so its `finally` still always closes the browser; the one exception is the pre-launch check, which throws before `chromium.launch` runs and therefore has nothing to close yet — the same reason `chromium.launch` itself sits outside that `try` in the first place.
 
 ### Time budgets clamp waits; they do not race them
 
