@@ -9,3 +9,5 @@ diagnostics/
 .claude
 .DS_Store
 .vscode
+.archify/*/*
+!.archify/*/linkedin-job-scraper.html

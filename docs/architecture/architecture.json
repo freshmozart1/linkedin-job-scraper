@@ -1,0 +1,560 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "LinkedIn Job Scraper Architecture",
+    "output": "docs/architecture/linkedin-job-scraper.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/freshmozart1/linkedin-job-scraper.git",
+      "provider": "github",
+      "revision": "26633cabd213f8cdb8f907d28952d3533655d7a3"
+    },
+    "legend": {
+      "entries": {
+        "external": {
+          "label": "Outside this library"
+        },
+        "backend": {
+          "label": "Engine module"
+        },
+        "security": {
+          "label": "Guard"
+        },
+        "frontend": {
+          "label": "Browser context"
+        }
+      }
+    }
+  },
+  "components": [
+    {
+      "id": "consumer",
+      "type": "external",
+      "label": "Consumer app",
+      "sublabel": "git dependency",
+      "pos": [
+        40,
+        260
+      ],
+      "size": [
+        130,
+        60
+      ],
+      "sources": [
+        {
+          "path": "src/index.ts",
+          "line": 17,
+          "end_line": 36,
+          "label": "public runScrape export"
+        },
+        {
+          "path": "src/types.ts",
+          "line": 689,
+          "end_line": 702,
+          "label": "RunScrapeOptions, RunScraper"
+        }
+      ]
+    },
+    {
+      "id": "urlbuilder",
+      "type": "backend",
+      "label": "buildSearchUrl",
+      "sublabel": "params to search URL",
+      "pos": [
+        340,
+        120
+      ],
+      "size": [
+        130,
+        60
+      ],
+      "sources": [
+        {
+          "path": "src/url.ts",
+          "line": 64,
+          "end_line": 111,
+          "label": "SearchParams to guest search URL"
+        }
+      ]
+    },
+    {
+      "id": "runscrape",
+      "type": "backend",
+      "label": "runScrape",
+      "sublabel": "run orchestrator",
+      "pos": [
+        340,
+        260
+      ],
+      "size": [
+        130,
+        60
+      ],
+      "sources": [
+        {
+          "path": "src/scraper/runScrape.ts",
+          "line": 79,
+          "end_line": 120,
+          "label": "launch, goto, validate, clear"
+        },
+        {
+          "path": "src/scraper/runScrape.ts",
+          "line": 122,
+          "end_line": 194,
+          "label": "discover, scrape, retry, outcome"
+        },
+        {
+          "path": "src/scraper/runScrape.ts",
+          "line": 195,
+          "end_line": 216,
+          "label": "abort, budget, cleanup"
+        }
+      ]
+    },
+    {
+      "id": "discovery",
+      "type": "backend",
+      "label": "Job discovery",
+      "sublabel": "scroll + See more",
+      "pos": [
+        580,
+        260
+      ],
+      "size": [
+        130,
+        60
+      ],
+      "sources": [
+        {
+          "path": "src/scraper/loadAllJobs.ts",
+          "line": 12,
+          "end_line": 34,
+          "label": "scroll then click phases"
+        },
+        {
+          "path": "src/scraper/scrollLoadPhase.ts",
+          "line": 49,
+          "end_line": 107,
+          "label": "incremental scroll"
+        },
+        {
+          "path": "src/scraper/collectJobListState.ts",
+          "line": 26,
+          "end_line": 76,
+          "label": "ordered unique job IDs"
+        }
+      ]
+    },
+    {
+      "id": "jobscrape",
+      "type": "backend",
+      "label": "Per-job scraper",
+      "sublabel": "click + identity gate",
+      "pos": [
+        820,
+        260
+      ],
+      "size": [
+        130,
+        60
+      ],
+      "sources": [
+        {
+          "path": "src/scraper/scrapeLoadedJobsOnce.ts",
+          "line": 11,
+          "end_line": 28,
+          "label": "first pass over unique jobs"
+        },
+        {
+          "path": "src/scraper/scrapeJobFromLocator.ts",
+          "line": 227,
+          "end_line": 272,
+          "label": "click and detail-pane identity gate"
+        },
+        {
+          "path": "src/scraper/scrapeJobFromLocator.ts",
+          "line": 274,
+          "end_line": 303,
+          "label": "read pane, company lookup"
+        }
+      ]
+    },
+    {
+      "id": "overlay",
+      "type": "security",
+      "label": "Overlay ladder",
+      "sublabel": "clears sign-in wall",
+      "pos": [
+        820,
+        120
+      ],
+      "size": [
+        130,
+        60
+      ],
+      "sources": [
+        {
+          "path": "src/scraper/clearBlockingOverlays.ts",
+          "line": 57,
+          "end_line": 213,
+          "label": "poll and escalate"
+        },
+        {
+          "path": "src/scraper/clickWithOverlayRetries.ts",
+          "line": 65,
+          "end_line": 144,
+          "label": "click with overlay clears"
+        },
+        {
+          "path": "src/scraper/neutralizeOverlay.ts",
+          "line": 31,
+          "end_line": 66,
+          "label": "last-resort neutralize"
+        }
+      ]
+    },
+    {
+      "id": "companylookup",
+      "type": "backend",
+      "label": "Company lookup",
+      "sublabel": "per-run address cache",
+      "pos": [
+        1060,
+        260
+      ],
+      "size": [
+        130,
+        60
+      ],
+      "sources": [
+        {
+          "path": "src/companyLookup.ts",
+          "line": 108,
+          "end_line": 176,
+          "label": "cache and retry loop"
+        },
+        {
+          "path": "src/companyLookup.ts",
+          "line": 178,
+          "end_line": 215,
+          "label": "addressesFor, cache policy"
+        }
+      ]
+    },
+    {
+      "id": "searchctx",
+      "type": "frontend",
+      "label": "Search context",
+      "sublabel": "guest session cookies",
+      "pos": [
+        580,
+        450
+      ],
+      "size": [
+        130,
+        60
+      ],
+      "sources": [
+        {
+          "path": "src/scraper/runScrape.ts",
+          "line": 88,
+          "end_line": 91,
+          "label": "search BrowserContext and page"
+        }
+      ]
+    },
+    {
+      "id": "companyctx",
+      "type": "frontend",
+      "label": "Company context",
+      "sublabel": "cookies cleared/page",
+      "pos": [
+        1060,
+        450
+      ],
+      "size": [
+        130,
+        60
+      ],
+      "sources": [
+        {
+          "path": "src/companyLookup.ts",
+          "line": 119,
+          "end_line": 120,
+          "label": "dedicated BrowserContext and page"
+        },
+        {
+          "path": "src/companyLookup.ts",
+          "line": 150,
+          "end_line": 163,
+          "label": "clearCookies before every goto"
+        }
+      ]
+    },
+    {
+      "id": "linkedinjobs",
+      "type": "external",
+      "label": "LinkedIn jobs",
+      "sublabel": "guest search + detail",
+      "pos": [
+        580,
+        630
+      ],
+      "size": [
+        130,
+        60
+      ],
+      "sources": [
+        {
+          "path": "src/url.ts",
+          "line": 3,
+          "end_line": 3,
+          "label": "guest search base URL"
+        },
+        {
+          "path": "src/scraper/runScrape.ts",
+          "line": 99,
+          "end_line": 108,
+          "label": "goto and validate navigation"
+        }
+      ]
+    },
+    {
+      "id": "linkedincompanies",
+      "type": "external",
+      "label": "LinkedIn company",
+      "sublabel": "Locations section",
+      "pos": [
+        1060,
+        630
+      ],
+      "size": [
+        130,
+        60
+      ],
+      "sources": [
+        {
+          "path": "src/companyLookup.ts",
+          "line": 152,
+          "end_line": 163,
+          "label": "goto company page, read locations"
+        }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "linkedin-job-scraper (in-process library)",
+      "wraps": [
+        "urlbuilder",
+        "runscrape",
+        "discovery",
+        "jobscrape",
+        "overlay",
+        "companylookup"
+      ],
+      "pad": 44
+    },
+    {
+      "kind": "region",
+      "label": "Chromium process",
+      "wraps": [
+        "searchctx",
+        "companyctx"
+      ],
+      "pad": 44
+    },
+    {
+      "kind": "security-group",
+      "label": "LinkedIn (remote)",
+      "wraps": [
+        "linkedinjobs",
+        "linkedincompanies"
+      ],
+      "pad": 44
+    }
+  ],
+  "connections": [
+    {
+      "id": "consumer-to-runscrape",
+      "from": "consumer",
+      "to": "runscrape",
+      "label": "runScrape(opts)",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "runscrape-to-urlbuilder",
+      "from": "runscrape",
+      "to": "urlbuilder",
+      "label": "SearchParams",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "runscrape-to-discovery",
+      "from": "runscrape",
+      "to": "discovery",
+      "label": "loadAllJobs",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "discovery-to-jobscrape",
+      "from": "discovery",
+      "to": "jobscrape",
+      "label": "unique jobs",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "jobscrape-to-companylookup",
+      "from": "jobscrape",
+      "to": "companylookup",
+      "label": "companyUrl",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "jobscrape-to-overlay",
+      "from": "jobscrape",
+      "to": "overlay",
+      "label": "clear blockers",
+      "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "discovery-to-searchctx",
+      "from": "discovery",
+      "to": "searchctx",
+      "label": "scroll, See more",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "jobscrape-to-searchctx",
+      "from": "jobscrape",
+      "to": "searchctx",
+      "label": "click, read pane",
+      "fromSide": "bottom",
+      "toSide": "right",
+      "via": [
+        [
+          885,
+          480
+        ]
+      ]
+    },
+    {
+      "id": "searchctx-to-linkedinjobs",
+      "from": "searchctx",
+      "to": "linkedinjobs",
+      "label": "HTTPS",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "companylookup-to-companyctx",
+      "from": "companylookup",
+      "to": "companyctx",
+      "label": "clearCookies, goto",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "companyctx-to-linkedincompanies",
+      "from": "companyctx",
+      "to": "linkedincompanies",
+      "label": "HTTPS",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "runscrape-to-consumer",
+      "from": "runscrape",
+      "to": "consumer",
+      "label": "ScrapeOutcome",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "bottom",
+      "via": [
+        [
+          405,
+          392
+        ],
+        [
+          105,
+          392
+        ]
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Primary path",
+      "items": [
+        "The consumer calls runScrape with searchParams, scraperOptions, onProgress and an AbortSignal; only the search keyword is required.",
+        "buildSearchUrl sends only the fields that were set; runScrape launches Chromium, opens the search context and navigates.",
+        "validateSearchNavigation rejects a missing response, an HTTP error, or a landing page off the guest search path.",
+        "Discovery scrolls one list item at a time, then clicks See more jobs, until unique and raw card counts stop growing.",
+        "Each distinct posting is clicked once and read only after the detail pane shows that posting's own ID.",
+        "The company lookup adds companyAddresses; ScrapeOutcome returns to the caller."
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Why two browser contexts",
+      "items": [
+        "LinkedIn serves a company page's Locations section only to a cookie jar that has not yet seen a company page.",
+        "So company pages load in their own context and clearCookies runs before every goto: 54 of 54 companies versus 1 of 54 on a reused context.",
+        "The search context keeps its guest session; clearing it would end the job search mid-run.",
+        "fetch() gets HTTP 999 from LinkedIn, so a company page must really be navigated to."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Guards and recovery",
+      "items": [
+        "Overlay ladder: pick a dismiss control, press Escape, then neutralize the overlay; the initial clear, See more clicks and every in-job click use it.",
+        "Identity gate: the detail pane must match the card's job ID; one immediate re-click, then a DetailPaneIdentityError failure.",
+        "Stale and identity-failed jobs get one deferred retry pass after the whole list was scraped once.",
+        "The company lookup never rejects: a null means unreadable, an empty list means read and unpublished, and empty pages get emptyRetries (default 1)."
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Budgets and cancellation",
+      "items": [
+        "perJobTimeoutMs (default 45 s) clamps every wait inside one job instead of racing it.",
+        "maxRunDurationMs becomes an AbortSignal: the run resolves with stoppedEarly set to run-time-budget and keeps its results.",
+        "A caller abort rejects with ScrapeAbortedError carrying partial results; the browser still closes in finally."
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Progress and diagnostics",
+      "items": [
+        "onProgress emits jobs:loading, jobs:found, job:start, then job:done or job:stale per job, plus overlay:undismissed.",
+        "Stale diagnostics are collected per job and summarized into ScrapeOutcome.staleReport (on by default)."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Ownership and trust",
+      "items": [
+        "The library is in-process: no server, database or files. The consuming app owns storage and scheduling.",
+        "runScrape launches Chromium and closes it, and the company lookup's context, in its finally block.",
+        "LinkedIn is an unofficial, moving surface with no login or credentials; markup and anti-bot gating vary by session.",
+        "No search default is baked in: every field except the keyword is optional and every timing constant is overridable."
+      ]
+    }
+  ]
+}
