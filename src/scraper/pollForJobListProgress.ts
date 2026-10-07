@@ -1,6 +1,6 @@
 import type { Page } from 'playwright';
 import { collectJobListState } from './collectJobListState';
-import { sleep } from './sleep';
+import { setTimeout as sleep } from 'node:timers/promises';
 
 export interface JobListCounts {
     rawCount: number;

@@ -19,8 +19,8 @@ npm test            # node --import tsx --test "test/*.test.ts" (offline, no bro
 npm run typecheck   # tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json
 
 # single test file / single test by name:
-node --import tsx --test test/scraper.test.ts
-node --import tsx --test --test-name-pattern "registerJobOccurrence" test/scraper.test.ts
+node --import tsx --test test/scrapeJob.test.ts
+node --import tsx --test --test-name-pattern "registerJobOccurrence" test/registerJobOccurence.test.ts
 ```
 
 There is no lint script; `typecheck` is the correctness gate. The `test` glob is non-recursive on purpose, so `test/helpers/**` is never collected as a test file.
@@ -185,7 +185,7 @@ Related trap: `page.evaluate` serializes its callback with `toString()`, so it *
 
 ## Testing
 
-`node:test` + `node:assert/strict` — no Jest/Mocha/Vitest, and **no mocking library**. `test/helpers/fakePlaywright.ts` provides `createFakePage`/`createFakeLocator`: plain objects implementing only the `Page`/`Locator` methods the scraper actually calls, cast to the real type via `as unknown as`. Follow that pattern rather than introducing a mocking framework — and extend the fake's config surface when new methods are needed instead of loosening the cast.
+`node:test` + `node:assert/strict` — no Jest/Mocha/Vitest, and **no mocking library**. `test/helpers/fakePlaywright/` provides `createFakePage`/`createFakeLocator`: plain objects implementing only the `Page`/`Locator` methods the scraper actually calls, cast to the real type via `as unknown as`. Follow that pattern rather than introducing a mocking framework — and extend the fake's config surface when new methods are needed instead of loosening the cast.
 
 No test launches a real browser, so the suite is fast and offline. That also means selector correctness against live LinkedIn markup is **not** covered by tests — changes to `selectors.ts` (or to any other code that reasons about real DOM structure or timing, e.g. the scroll phases) need manual verification against the real page.
 

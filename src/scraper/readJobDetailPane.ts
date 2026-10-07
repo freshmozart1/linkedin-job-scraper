@@ -127,28 +127,25 @@ export async function readJobDetailPane(
     // is the closest the markup will ever be to what the reads above saw.
     // Waiting until after checkForLateOverlay would mean snapshotting a pane
     // an overlay clear may just have mutated.
-    let captured = await captureSnapshot(
+    const captured = await captureSnapshot(
         page,
         diagnostics,
         budget,
         companyMismatch || sourceJobIdMismatch,
     );
-    const lateOverlay = await checkForLateOverlay(
+    const lateOverlayDetected = await checkForLateOverlay(
         page,
         overlayClear,
         budget,
         diagnostics,
     );
-    const lateOverlayDetected = lateOverlay.detected;
     diagnostics?.record({
         lateOverlayDetected,
     });
-    // Only reached when neither mismatch fired, so nothing has been captured
-    // yet: a late overlay is the remaining reason this job is suspect, and
-    // `snapshotEveryJob` is the healthy baseline a suspect pane has to be
-    // compared against before "this pane looks wrong" means anything.
+    // A late overlay or `snapshotEveryJob` also requests a capture when the
+    // earlier mismatch check did not produce one.
     if (!captured)
-        captured = await captureSnapshot(
+        await captureSnapshot(
             page,
             diagnostics,
             budget,

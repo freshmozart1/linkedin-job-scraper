@@ -15,7 +15,7 @@ import {
 } from './readJobListIdentity';
 import { registerJobOccurrence } from './registerJobOccurrence';
 import { buildSkippedResult } from './buildSkippedResult';
-import { sleep } from './sleep';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { clickWithOverlayRetries } from './clickWithOverlayRetries';
 import type { OverlayClearSettings } from './clearBlockingOverlays';
 import { dismissOverlayAfterClick } from './dismissOverlayAfterClick';

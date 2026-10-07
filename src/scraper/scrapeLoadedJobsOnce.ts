@@ -3,7 +3,7 @@ import type { LoadedJob } from './collectJobListState';
 import type { ScrapeContext } from './scrapeContext';
 import { isRetryableResult } from './isRetryableResult';
 import { scrapeJobAndRecord } from './scrapeJobAndRecord';
-import { sleep } from './sleep';
+import { setTimeout as sleep } from 'node:timers/promises';
 
 // runScrape's first pass over the ordered unique-card mapping. Logical result
 // indices stay contiguous even when their corresponding raw DOM positions do

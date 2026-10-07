@@ -1,5 +1,5 @@
 // Minimal hand-written fakes for the Playwright Browser/Page/Locator surface
-// that src/scraper.ts and src/companyLookup.ts actually call. Plain objects
+// that src/scraper/ and src/companyLookup.ts actually call. Plain objects
 // satisfying only the methods used, cast to the real type at the call site —
 // no mocking library, no real browser.
 import type { Browser, BrowserContext } from 'playwright';

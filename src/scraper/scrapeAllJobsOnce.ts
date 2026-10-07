@@ -2,7 +2,7 @@ import type { JobResult } from '../types';
 import type { ScrapeContext } from './scrapeContext';
 import { scrapeJobAndRecord } from './scrapeJobAndRecord';
 import { isRetryableResult } from './isRetryableResult';
-import { sleep } from './sleep';
+import { setTimeout as sleep } from 'node:timers/promises';
 
 // CRAP score here is driven by fallow's *estimated* (not instrumented)
 // coverage defaulting to 0% for this function, not an actual

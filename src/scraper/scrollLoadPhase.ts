@@ -1,7 +1,7 @@
 import type { Page, Locator } from 'playwright';
 import type { ScrapeProgressEvent } from '../types';
 import { collectJobListState } from './collectJobListState';
-import { sleep } from './sleep';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { hidePageSectionsAboveJobList } from './hidePageSectionsAboveJobList';
 import { scrollNewlyRenderedListItems } from './scrollNewlyRenderedListItems';
 
