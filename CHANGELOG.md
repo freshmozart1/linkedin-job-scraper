@@ -2,6 +2,19 @@
 
 All notable changes to this project are documented in this file.
 
+## v0.13.5
+
+### Changed
+
+- Company-lookup and overlay option types now have one definition, with their existing public import paths preserved. Duplicate timer wrappers use Node's promise timers; redundant internal result objects, assignments, conditions and an unused fake locator method were removed (PR #49).
+- Mapped-card resolution and late-overlay checks return only what their callers need. Exact posting-ID verification, deferred retries, time budgets, cancellation, snapshot ordering and complete overlay diagnostic timelines are preserved. Public API signatures, option shapes and defaults are unchanged.
+- Corrected stale test commands and helper paths, and configured the documented diagnostic script as a Fallow entry point.
+
+### Validation
+
+- Three offline regression cases cover a mapped posting moving to another raw position, a disappeared posting being rejected before any replacement card is clicked, and an unparseable card retaining its recorded raw position.
+- The full offline suite passes 292 tests; build and source/test typechecks pass. Public runtime exports match the pre-cleanup baseline, and option types and existing import paths remain compatible. Live LinkedIn markup was not exercised.
+
 ## v0.13.4
 
 ### Fixed
