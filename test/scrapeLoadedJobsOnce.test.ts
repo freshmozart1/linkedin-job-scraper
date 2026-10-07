@@ -180,4 +180,105 @@ describe('runScrape unique-card traversal', () => {
             { sourceJobId: '2', rawIndex: 2 },
         ]);
     });
+
+    for (const scenario of [
+        {
+            name: 'follows a posting that moved from its recorded raw position',
+            sourceJobIds: ['101', '102'],
+            loadedJob: { sourceJobId: '102', rawIndex: 0 },
+            expectedTitle: 'Job at 1',
+            expectedStatus: 'success',
+            expectedClicks: [1],
+            expectedError: undefined,
+        },
+        {
+            name: 'refuses a different card when the mapped posting disappeared',
+            sourceJobIds: ['101'],
+            loadedJob: { sourceJobId: '102', rawIndex: 0 },
+            expectedTitle: 'Job at 0',
+            expectedStatus: 'failed',
+            expectedClicks: [],
+            expectedError:
+                'Loaded job 102 is no longer available at its mapped list position',
+        },
+        {
+            name: 'retains the recorded raw position for an unparseable card',
+            sourceJobIds: [null, null],
+            loadedJob: { sourceJobId: null, rawIndex: 1 },
+            expectedTitle: 'Job at 1',
+            expectedStatus: 'failed',
+            expectedClicks: [],
+            expectedError:
+                'No source job ID found for job item - LinkedIn markup has likely changed',
+        },
+    ]) {
+        it(scenario.name, async ({ assert }) => {
+            let detailJobId: string | null = null;
+            const clicks: number[] = [];
+            const jobLocators = scenario.sourceJobIds.map((sourceJobId, rawIndex) =>
+                createFakeJobLocator({
+                    title: `Job at ${rawIndex}`,
+                    listCompany: 'Acme',
+                    sourceJobId,
+                    sourceUrl: sourceJobId
+                        ? `https://www.linkedin.com/jobs/view/job-${sourceJobId}`
+                        : 'https://www.linkedin.com/jobs/view/unparseable',
+                    companyUrl: 'https://www.linkedin.com/company/acme',
+                    location: 'Berlin',
+                    postedAt: '2026-09-09',
+                    onClick: () => {
+                        clicks.push(rawIndex);
+                        detailJobId = sourceJobId;
+                    },
+                }),
+            );
+            const page = createFakePage({
+                locatorsBySelector: {
+                    [JOB_LIST_SELECTOR]: createFakeLocator({
+                        nth: (rawIndex) => jobLocators[rawIndex]!,
+                    }),
+                    ...baseScrapeJobLocators(
+                        () => 'Acme',
+                        'A description.',
+                        ['Full-time'],
+                        () => detailJobId,
+                    ),
+                },
+                defaultLocator: createFakeLocator({
+                    waitFor: () => {},
+                    isVisible: () => false,
+                }),
+                evaluate: () =>
+                    scenario.sourceJobIds.map((sourceJobId) => ({
+                        entityUrn: sourceJobId
+                            ? `urn:li:jobPosting:${sourceJobId}`
+                            : null,
+                        href: null,
+                    })),
+            });
+            const results: JobResult[] = [];
+
+            await scrapeLoadedJobsOnce(
+                {
+                    page,
+                    totalJobs: 1,
+                    seenSourceJobIds: new Map(),
+                    runTimestamp: 123,
+                    delayBetweenJobsMs: 0,
+                    companyLookup: stubCompanyLookup(),
+                },
+                results,
+                [scenario.loadedJob],
+            );
+
+            assert.equal(results.length, 1);
+            assert.equal(results[0]?.status, scenario.expectedStatus);
+            assert.equal(results[0]?.title, scenario.expectedTitle);
+            assert.deepEqual(clicks, scenario.expectedClicks);
+            if (results[0]?.status === 'failed') {
+                assert.equal(results[0].error, scenario.expectedError);
+                assert.equal(results[0].descriptionText, null);
+            }
+        });
+    }
 });

@@ -1,41 +1,16 @@
 import type { Page } from 'playwright';
+import { setTimeout as sleep } from 'node:timers/promises';
 import type {
+    OverlayClearOptions,
     OverlayClearResult,
     OverlayDiagnostics,
-    ScrapeProgressEvent,
 } from '../types';
 import { findVisibleOverlay } from './findVisibleOverlay';
 import { readOverlayDiagnostics } from './readOverlayDiagnostics';
 import { clickOverlayDismissControl } from './clickOverlayDismissControl';
 import { neutralizeOverlay } from './neutralizeOverlay';
-import { sleep } from './sleep';
 
-export interface OverlayClearOptions {
-    timeoutMs?: number;
-    pollIntervalMs?: number;
-    requiredConsecutiveClear?: number;
-    /** Failed click+Escape rounds allowed before neutralizing; see ScraperOptions.overlayClear. */
-    maxDismissAttempts?: number;
-    /** Whether the last-resort DOM mutation is permitted; see ScraperOptions.overlayClear. */
-    neutralizeStuckOverlay?: boolean;
-    /** Threaded down from RunScrapeOptions so an undismissable overlay can be reported without a logger. */
-    onProgress?: (event: ScrapeProgressEvent) => void;
-}
-
-/**
- * The part of `OverlayClearOptions` a caller steers from `ScraperOptions`,
- * threaded down to every clear site in a run rather than only to the one
- * `runScrape` performs after `page.goto`. Without it, `neutralizeStuckOverlay:
- * false` still mutated the DOM on every job, since the in-job clear sites
- * (clickWithOverlayRetries / dismissOverlayAfterClick / checkForLateOverlay)
- * build their own hardcoded option objects. Timings stay per-site: each of
- * those has its own budget for its own point in the job, and only the tier
- * policy is the caller's to set.
- */
-export type OverlayClearSettings = Pick<
-    OverlayClearOptions,
-    'maxDismissAttempts' | 'neutralizeStuckOverlay' | 'onProgress'
->;
+export type { OverlayClearOptions, OverlayClearSettings } from '../types';
 
 // Clears whatever is blocking clicks on the page, escalating cheapest-first
 // instead of repeating one blind click.

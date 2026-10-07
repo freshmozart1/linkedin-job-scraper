@@ -1,7 +1,7 @@
 import type { ScrapeContext } from './scrapeContext';
 import type { LoadedJob } from './collectJobListState';
 import { scrapeJobAndRecord } from './scrapeJobAndRecord';
-import { sleep } from './sleep';
+import { setTimeout as sleep } from 'node:timers/promises';
 
 // Detail-pane staleness or an identity-gate failure caught on the first pass
 // gets exactly one retry, deferred until the whole list has been scraped once
@@ -21,7 +21,7 @@ export async function retryStaleJobs(
     ctx: ScrapeContext,
     results: import('../types').JobResult[],
     retryIndices: number[],
-    loadedJobs?: readonly LoadedJob[],
+    loadedJobs: readonly LoadedJob[],
 ): Promise<void> {
     const delayBetweenJobsMs = ctx.delayBetweenJobsMs ?? 700;
     for (const i of retryIndices) {
@@ -33,7 +33,7 @@ export async function retryStaleJobs(
         await scrapeJobAndRecord(ctx, results, i, {
             preClickDelayMs: 1000,
             pass: 'retry',
-            loadedJob: loadedJobs?.[i],
+            loadedJob: loadedJobs[i],
         });
         await sleep(delayBetweenJobsMs);
     }

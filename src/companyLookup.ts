@@ -16,32 +16,19 @@
 // page has to be genuinely navigated to — there is no cheap request-only path.
 
 import type { Browser, BrowserContext, Page } from 'playwright';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { toCompanyAddresses } from './address';
 // JobBudget comes from ./types (all public types live there), imported
 // type-only so this file keeps zero coupling to scraper/ — the budget is
 // created there, but nothing about reading a company page depends on it.
-import type { CompanyAddress, JobBudget, RawCompanyLocation } from './types';
+import type {
+  CompanyAddress,
+  CompanyLookupOptions,
+  JobBudget,
+  RawCompanyLocation,
+} from './types';
 
-export interface CompanyLookupOptions {
-  navigationTimeoutMs?: number;
-  /**
-   * Extra attempts whenever an attempt yields no addresses — named for the
-   * case it exists for (a page that loads with its Locations section absent,
-   * which LinkedIn serves intermittently: the same company can come back with
-   * addresses on one load and empty on the next), but the same budget also
-   * covers an `/authwall` bounce, an unsuccessful or missing HTTP response,
-   * and a navigation that throws. So
-   * `emptyRetries: 0` disables retrying those too, not just empty pages.
-   */
-  emptyRetries?: number;
-  /** Pause after a lookup that hit the network. Cache hits skip it entirely. */
-  delayBetweenLookupsMs?: number;
-  /**
-   * Optional cap on how many addresses to keep per company. The list is
-   * primary-first, so any cap of 1 or more keeps the primary address.
-   */
-  maxAddressesPerCompany?: number;
-}
+export type { CompanyLookupOptions } from './types';
 
 export interface CompanyLookup {
   /**
@@ -65,10 +52,6 @@ export interface CompanyLookup {
     budget?: JobBudget
   ): Promise<CompanyAddress[] | null>;
   close(): Promise<void>;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 // LinkedIn bounces guests to `/authwall` intermittently. It's a redirect, not

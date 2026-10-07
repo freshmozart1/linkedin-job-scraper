@@ -4,7 +4,6 @@ import type { Locator } from 'playwright';
 export function createFakeLocator(config: FakeLocatorConfig = {}): Locator {
     const locator = {
         first: () => locator,
-        last: () => locator,
         nth: (index: number) => (config.nth ? config.nth(index) : locator),
         filter: () => locator,
         locator: (selector: string) =>

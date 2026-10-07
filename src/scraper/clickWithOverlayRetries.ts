@@ -3,7 +3,7 @@ import type { JobBudget } from '../types';
 import { clearBlockingOverlays } from './clearBlockingOverlays';
 import type { OverlayClearSettings } from './clearBlockingOverlays';
 import { boundedClearTimeout, boundedTimeout } from './jobBudget';
-import { sleep } from './sleep';
+import { setTimeout as sleep } from 'node:timers/promises';
 import type { StaleDiagnosticsRecorder } from './createStaleDiagnostics';
 import { recordOverlayCheck } from './recordOverlayCheck';
 

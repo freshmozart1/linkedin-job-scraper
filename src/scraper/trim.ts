@@ -27,9 +27,7 @@ export async function trim<T = string | string[] | null>(
 ): Promise<T> {
     const isJobCriteria = locator === JOB_CRITERIA_VALUE_SELECTOR;
     const timeout = boundedTimeout(budget, 1000);
-    const el = (isJobCriteria && p ? p : (p ?? jobItem))
-        .locator(locator)
-        .first();
+    const el = (p ?? jobItem).locator(locator).first();
     try {
         if (isJobCriteria && p)
             return (await el

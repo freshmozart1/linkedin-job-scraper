@@ -32,6 +32,68 @@ export interface RawCompanyLocation {
     lines: string[];
 }
 
+export interface CompanyLookupOptions {
+    navigationTimeoutMs?: number;
+    /**
+     * Extra attempts whenever an attempt yields no addresses — named for the
+     * case it exists for (a page that loads with its Locations section absent,
+     * which LinkedIn serves intermittently: the same company can come back with
+     * addresses on one load and empty on the next), but the same budget also
+     * covers an `/authwall` bounce, an unsuccessful or missing HTTP response,
+     * and a navigation that throws. So
+     * `emptyRetries: 0` disables retrying those too, not just empty pages.
+     */
+    emptyRetries?: number;
+    /** Pause after a lookup that hit the network. Cache hits skip it entirely. */
+    delayBetweenLookupsMs?: number;
+    /**
+     * Optional cap on how many addresses to keep per company. The list is
+     * primary-first, so any cap of 1 or more keeps the primary address.
+     */
+    maxAddressesPerCompany?: number;
+}
+
+export interface OverlayClearOptions {
+    timeoutMs?: number;
+    pollIntervalMs?: number;
+    requiredConsecutiveClear?: number;
+    /**
+     * How many rounds of "click the best control, then press `Escape`"
+     * may fail against a still-visible overlay before it is neutralized
+     * outright. Default `2`. Raising it trades a longer stall for more
+     * chances at a genuine dismissal; `0` neutralizes on the first
+     * round without ever clicking.
+     */
+    maxDismissAttempts?: number;
+    /**
+     * Whether the last-resort DOM mutation is allowed at all: stripping
+     * the overlay's `--visible` modifier (which restores its own base
+     * `opacity-0 invisible pointer-events-none` classes) and forcing
+     * inline `pointer-events: none`. Default `true`, because the
+     * alternative observed in GitHub issue #27 was every subsequent job
+     * click failing against an overlay nothing could close. Set `false`
+     * to keep the page untouched and accept `stillBlocking` instead.
+     */
+    neutralizeStuckOverlay?: boolean;
+    /** Threaded down from RunScrapeOptions so an undismissable overlay can be reported without a logger. */
+    onProgress?: (event: ScrapeProgressEvent) => void;
+}
+
+/**
+ * The part of `OverlayClearOptions` a caller steers from `ScraperOptions`,
+ * threaded down to every clear site in a run rather than only to the one
+ * `runScrape` performs after `page.goto`. Without it, `neutralizeStuckOverlay:
+ * false` still mutated the DOM on every job, since the in-job clear sites
+ * (clickWithOverlayRetries / dismissOverlayAfterClick / checkForLateOverlay)
+ * build their own hardcoded option objects. Timings stay per-site: each of
+ * those has its own budget for its own point in the job, and only the tier
+ * policy is the caller's to set.
+ */
+export type OverlayClearSettings = Pick<
+    OverlayClearOptions,
+    'maxDismissAttempts' | 'neutralizeStuckOverlay' | 'onProgress'
+>;
+
 /**
  * The list-level identity of a job card, read off it by `readJobListIdentity`
  * before the card is ever clicked. Passed to `ScraperOptions.shouldScrapeJob`
@@ -600,44 +662,9 @@ export interface ScraperOptions {
     maxRunDurationMs?: number;
     delayBetweenJobsMs?: number;
     clickRetryAttempts?: number;
-    overlayClear?: {
-        timeoutMs?: number;
-        pollIntervalMs?: number;
-        requiredConsecutiveClear?: number;
-        /**
-         * How many rounds of "click the best control, then press `Escape`"
-         * may fail against a still-visible overlay before it is neutralized
-         * outright. Default `2`. Raising it trades a longer stall for more
-         * chances at a genuine dismissal; `0` neutralizes on the first
-         * round without ever clicking.
-         */
-        maxDismissAttempts?: number;
-        /**
-         * Whether the last-resort DOM mutation is allowed at all: stripping
-         * the overlay's `--visible` modifier (which restores its own base
-         * `opacity-0 invisible pointer-events-none` classes) and forcing
-         * inline `pointer-events: none`. Default `true`, because the
-         * alternative observed in GitHub issue #27 was every subsequent job
-         * click failing against an overlay nothing could close. Set `false`
-         * to keep the page untouched and accept `stillBlocking` instead.
-         */
-        neutralizeStuckOverlay?: boolean;
-    };
+    overlayClear?: Omit<OverlayClearOptions, 'onProgress'>;
     /** Timings and limits for the company-page address lookup; see `createCompanyLookup`. */
-    companyLookup?: {
-        navigationTimeoutMs?: number;
-        /**
-         * Extra attempts whenever an attempt yields no addresses: a company page that loads with no
-         * Locations section (LinkedIn serves it intermittently), an `/authwall` bounce,
-         * an unsuccessful or missing HTTP response, or a navigation error.
-         * `0` disables retrying all these cases, not just the empty-section case.
-         */
-        emptyRetries?: number;
-        /** Pause after a lookup that actually hit the network; cache hits are not delayed. */
-        delayBetweenLookupsMs?: number;
-        /** Optional cap on addresses kept per company (some publish 100+). The list is primary-first, so any cap of 1 or more keeps the primary. */
-        maxAddressesPerCompany?: number;
-    };
+    companyLookup?: CompanyLookupOptions;
     /**
      * Switches for the per-job stale diagnostics (GitHub issue #29): what
      * `ScrapeOutcome.staleReport` and the two job events' `diagnostics` are

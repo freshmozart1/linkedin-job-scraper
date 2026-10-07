@@ -55,15 +55,15 @@ export async function scrapeJobAndRecord(
     };
     let result: JobResult;
     if (options.loadedJob) {
-        const resolved = await resolveLoadedJobItem(
+        const jobItem = await resolveLoadedJobItem(
             ctx.page,
             options.loadedJob,
         );
         result = await scrapeJobFromLocator(
             ctx.page,
             index,
-            resolved.jobItem,
-            resolved.expectedSourceJobId,
+            jobItem,
+            options.loadedJob.sourceJobId,
             scrapeOptions,
         );
     } else {

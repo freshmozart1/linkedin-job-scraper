@@ -1,5 +1,5 @@
 import type { Page } from 'playwright';
-import { sleep } from './sleep';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { scrollToListItem } from './scrollToListItem';
 
 // LinkedIn's own automatic infinite scroll caps out around 120 items before
