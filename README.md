@@ -51,7 +51,9 @@ console.log(outcome.url);    // the LinkedIn search URL that was scraped
 
 ## Architecture
 
-![Architecture of linkedin-job-scraper: the consumer calls runScrape, which builds the search URL, discovers the job list, scrapes each posting and looks up its company in a separate cookie-cleared browser context, then returns a ScrapeOutcome](docs/architecture/architecture.png)
+[![Architecture of linkedin-job-scraper: the consumer calls runScrape, which builds the search URL, discovers the job list, scrapes each posting and looks up its company in a separate cookie-cleared browser context, then returns a ScrapeOutcome](docs/architecture/architecture.png)](./.archify/architecture-linkedin-job-scraper-20261007-184248/linkedin-job-scraper.html)
+
+Click the diagram to open the interactive version. GitHub shows HTML files as source, so download the file and open it locally in a browser.
 
 The primary path runs left to right through the in-process library: `runScrape` builds the guest search URL, job discovery loads the list, the per-job scraper reads each distinct posting, and the company lookup adds office addresses before a `ScrapeOutcome` goes back to the caller. Search pages and company pages are driven through two separate Chromium browser contexts, because LinkedIn only serves a company's Locations section to a cookie jar that has not yet seen a company page. The diagram source is [`docs/architecture/architecture.json`](docs/architecture/architecture.json), authored with Archify.
 
